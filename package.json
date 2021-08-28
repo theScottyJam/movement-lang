@@ -4,11 +4,15 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "author": "thescottyjam <theScottyJam@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "jison": "^0.4.18"
+    "jison": "^0.4.18",
+    "string.prototype.replaceall": "^1.0.5"
+  },
+  "devDependencies": {
+    "jest": "^27.0.6"
   }
 }
