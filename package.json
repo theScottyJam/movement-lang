@@ -4,13 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "nearleyc grammar.ne -o grammar.built.js && node index.js",
     "test": "jest"
   },
   "author": "thescottyjam <theScottyJam@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "jison": "^0.4.18",
-    "string.prototype.replaceall": "^1.0.5"
+    "moo": "^0.5.1",
+    "nearley": "^2.20.1"
   },
   "devDependencies": {
     "jest": "^27.0.6"

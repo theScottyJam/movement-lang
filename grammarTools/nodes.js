@@ -89,21 +89,6 @@ const nodes = module.exports = {
       },
     })
   },
-  '++': (pos, { l, r }) => {
-    let finalType
-    return tools.node({
-      pos,
-      exec: rt => tools.createValue({ type: finalType, raw: l.exec(rt).raw.concat(r.exec(rt).raw) }),
-      typeCheck: state => {
-        const { respState: lRespState, type: lType } = l.typeCheck(state)
-        const { respState: rRespState, type: rType } = r.typeCheck(state)
-        tools.assertType(lType, tools.types.string, l.pos)
-        tools.assertType(rType, tools.types.string, r.pos)
-        finalType = tools.types.string
-        return { respState: tools.mergeRespStates(lRespState, rRespState), type: finalType }
-      },
-    })
-  },
   '+': (pos, { l, r }) => {
     let finalType
     return tools.node({
@@ -224,7 +209,7 @@ const nodes = module.exports = {
   }),
   number: (pos, { value }) => tools.node({
     pos,
-    exec: rt => tools.createValue({ raw: BigInt(value), type: tools.types.int }),
+    exec: rt => tools.createValue({ raw: value, type: tools.types.int }),
     typeCheck: state => ({ respState: tools.createRespState(), type: tools.types.int }),
   }),
   string: (pos, { uninterpretedValue }) => {
@@ -437,7 +422,7 @@ const nodes = module.exports = {
     exec: rt => invokeExpr.exec(rt),
     typeCheck: state => {
       if (invokeExpr.data.type !== 'INVOKE') {
-        throw new tools.SemanticError(`This expression received a purity annotation, but such annotations should only be used on function calls.`, invokeExpr.pos)
+        throw new Error(`Internal Error: This expression received a purity annotation, but such annotations should only be used on function calls.`)
       }
       return invokeExpr.typeCheck(state, { callWithPurity: purity })
     }
@@ -459,7 +444,7 @@ const nodes = module.exports = {
     pos,
     exec: rt => {
       const result = condition.exec(rt)
-      return result ? ifSo.exec(rt) : ifNot.exec(rt)
+      return result.raw ? ifSo.exec(rt) : ifNot.exec(rt)
     },
     typeCheck: state => {
       const { respState: condRespState, type: condType } = condition.typeCheck(state)

@@ -1,18 +1,10 @@
 'use strict'
 
-require('string.prototype.replaceall').shim();
-
-const fs = require('fs')
-const path = require('path')
-const { Parser } = require("jison")
+const nearley = require("nearley");
 const grammarTools = require('./grammarTools')
+const builtGrammar = require('./grammar.built')
 
-const grammarText = fs.readFileSync(path.join(__dirname, `grammar.jison`), 'utf8')
-
-if (globalThis.grammarTools) throw new Error('UNREACHABLE')
-globalThis.grammarTools = grammarTools // Provide grammarTools to the parser
-const parser = new Parser(grammarText)
-delete globalThis.grammarTools
+const parser = new nearley.Parser(nearley.Grammar.fromCompiled(builtGrammar));
 
 const termColors = {
   bold: '\u001b[1m',
@@ -21,10 +13,24 @@ const termColors = {
   reset: '\u001b[0m',
 }
 
+function parse(text) {
+  parser.feed(text)
+  if (parser.results.length === 0) throw new tools.SyntaxError('Unexpected end-of-file.', null)
+  if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
+  return parser.results[0]
+}
+
 function printPosition(text, pos) {
   const MAX_COLS = 75
   const OVERFLOW_LEFT_PAD = 20
-  const { first_line: firstLine, last_line: lastLine, first_column: firstCol, last_column: lastCol } = pos
+
+  const effectedText = text.slice(pos.offset, pos.offset + pos.length)
+  const newLineCount = effectedText.split('\n').length - 1
+  const firstLine = pos.line
+  const lastLine = firstLine + newLineCount
+  const firstCol = pos.col - 1
+  const lastCol = newLineCount === 0 ? firstCol + pos.length : effectedText.split('\n').pop().length - 1
+
   const line = text.split(/\r?\n/)[firstLine - 1]
   const lastColOnFirstLine = firstLine === lastLine ? lastCol : line.length
 
@@ -61,12 +67,16 @@ exports.run = function run(text) {
   let ast
 
   try {
-    ast = parser.parse(text)
+    ast = parse(text)
   } catch (err) {
     if (err instanceof grammarTools.SemanticError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Semantic Error: ' + reset + err.message)
-      printPosition(text, err.pos)
+      if (err.pos) {
+        printPosition(text, err.pos)
+      } else if (err.pos !== null) {
+        throw new Error('Internal error: Forgot to set the "pos" attribute on this error')
+      }
       return
     } else if (err instanceof grammarTools.SyntaxError) {
       const { lightRed, reset } = termColors
@@ -74,7 +84,7 @@ exports.run = function run(text) {
       printPosition(text, err.pos)
       return
     } else {
-      if (!err.hash) throw err // If it's not a syntax error from Jison
+      if (!('token' in err)) throw err // If it's not a syntax error from Nearley
       console.error(err.message)
       return
     }
@@ -106,7 +116,7 @@ exports.testRun = function testRun(text) {
   const debugOutput = value => result.push(value)
 
   grammarTools.withDebugOutput(debugOutput, () => {
-    const ast = parser.parse(text)
+    const ast = parse(text)
     ast.typeCheck()
     ast.exec()
   })

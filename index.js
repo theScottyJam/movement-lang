@@ -1,17 +1,23 @@
 'use strict'
 
 globalThis.debug = (...args) => {
-  console.log(...args)
+  console.info(...args)
   return args[args.length - 1]
 }
 
 const { run } = require('./parser')
 
 run(`\
-  function f() {
-
+begin {
+  if true {
+    print 1
+  } else if true {
+    print 2
+  } else if false {
+    print 3
+  } else {
+    print 4
   }
-  begin {
-    print run f()
-  }
+  print 'end'
+}
 `)

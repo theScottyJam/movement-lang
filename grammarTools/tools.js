@@ -20,8 +20,38 @@ class BaseParseTimeError extends Error {
   }
 }
 
+const isPos = Symbol('Position')
+const throw_ = msg => { throw new Error(msg) }
+const truncate = (msg, amount=100) => {
+  if (msg.length <= amount) return msg
+  return msg.slice(0, amount - 1) + '…'
+}
+
 const tools = module.exports = {
   anyParams: Symbol('Any Params'), // temporary
+  asPos: token => token.text == null
+    ? throw_(`Internal error: Attempted to extract a position out of the non-token '${truncate(JSON.stringify(token))}'`)
+    : ({
+      [isPos]: true,
+      line: token.line,
+      col: token.col,
+      length: token.text.length,
+      offset: token.offset,
+    }),
+  range: (token1, token2) => {
+    const pos1 = token1[isPos] ? token1 : tools.asPos(token1)
+    const pos2 = token2[isPos] ? token2 : tools.asPos(token2)
+    return {
+      [isPos]: true,
+      line: pos1.line,
+      col: pos1.col,
+      length: (pos2.offset - pos1.offset) + pos2.length,
+      offset: pos1.offset,
+    }
+  },
+  mapMapValues: (map, mapFn) => (
+    new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
+  ),
   node: ({ exec, typeCheck, data = {}, pos = null }) => ({
     exec,
     typeCheck,
