@@ -8,16 +8,7 @@ globalThis.debug = (...args) => {
 const { run } = require('./parser')
 
 run(`\
-begin {
-  if true {
-    print 1
-  } else if true {
-    print 2
-  } else if false {
-    print 3
-  } else {
-    print 4
-  }
-  print 'end'
-}
+let f = <#T>(x #T) #T => x
+let x = f(2)
+print if true then x else 'x'
 `)

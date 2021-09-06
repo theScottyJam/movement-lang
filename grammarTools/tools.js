@@ -2,16 +2,35 @@
 
 const top = array => array[array.length - 1]
 
-const createType = (typeSentinel, { repr, compare = () => true, data = {}, typeInstance = null }) => ({
-  typeSentinel,
-  repr,
-  compare,
-  data,
-  typeInstance,
-  withName: newName => createType(typeSentinel, { repr: () => newName, compare, data, typeInstance }),
-  asNewInstance: () => createType(typeSentinel, { repr, compare, data, typeInstance: Symbol() }),
-  uninstantiate: () => createType(typeSentinel, { repr, compare, data, typeInstance: null }),
-})
+const createType = (typeSentinel, { repr, compare = () => true, data = {}, typeInstance = null, matchUpTemplates = null, fillTemplateParams = null }) => {
+  const update = (newProps) => createType(typeSentinel, {
+    repr: newProps.repr ?? repr,
+    compare: newProps.compare ?? compare,
+    data: newProps.data ?? data,
+    typeInstance: newProps.typeInstance ?? typeInstance,
+    matchUpTemplates: newProps.matchUpTemplates ?? matchUpTemplates,
+    fillTemplateParams: newProps.fillTemplateParams ?? fillTemplateParams,
+  })
+  let self
+  return self = {
+    typeSentinel,
+    repr,
+    compare,
+    data,
+    typeInstance,
+    withName: newName => update({ repr: () => newName }),
+    asNewInstance: () => update({ typeInstance: Symbol() }),
+    uninstantiate: () => update({ typeInstance: null }),
+    // Match up one type with this type, and call visit() every time a template parameter is reached.
+    matchUpTemplates: matchUpTemplates ?? (({ usingType, onTemplate }) => {
+      if (typeInstance) onTemplate({ self, other: usingType })
+    }),
+    fillTemplateParams: fillTemplateParams ?? (({ getReplacement }) => {
+      if (!typeInstance) return self
+      return getReplacement(self)
+    })
+  }
+}
 
 class BaseParseTimeError extends Error {
   constructor(message, pos) {
@@ -52,9 +71,10 @@ const tools = module.exports = {
   mapMapValues: (map, mapFn) => (
     new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
   ),
-  node: ({ exec, typeCheck, data = {}, pos = null }) => ({
+  node: ({ exec, typeCheck, contextlessTypeCheck, data = {}, pos = null }) => ({
     exec,
     typeCheck,
+    contextlessTypeCheck, // Only needed by assignment targets
     data,
     pos, // pos can only be omitted on non-expression nodes
   }),
@@ -105,7 +125,7 @@ const tools = module.exports = {
       })
     },
     addToTypeScope(identifier, createType, pos) {
-      // createType() is a function and not a pure type, so that unknown types can be added
+      // createType() is a function and not a plain type, so that unknown types can be added
       // to the scope, and each reference to the unknown type will produce a unique unknown instance
       // preventing you from assigning one unknown type to another.
       const newScope = new Map(top(definedTypes))
@@ -133,17 +153,23 @@ const tools = module.exports = {
       return null
     },
   }),
-  createRespState: ({ outerScopeVars = [], returnTypes = [] } = {}) => ({
+  createRespState: ({ outerScopeVars = [], returnTypes = [], declarations = [] } = {}) => ({
     outerScopeVars,
     returnTypes,
+    declarations,
     update: opts => tools.createRespState({
       outerScopeVars: opts.outerScopeVars ?? outerScopeVars,
       returnTypes: opts.returnTypes ?? returnTypes,
+      declarations: opts.declarations ?? declarations,
     }),
+    applyDeclarations: state => (
+      declarations.reduce((state, { identifier, type, identPos }) => state.addToScope(identifier, type, identPos), state)
+    ),
   }),
   mergeRespStates: (...states) => tools.createRespState({
     outerScopeVars: states.flatMap(s => s.outerScopeVars),
     returnTypes: states.flatMap(s => s.returnTypes),
+    declarations: states.flatMap(s => s.declarations),
   }),
   types: {
     unit: createType(Symbol('unit type'), { repr: () => '#unit' }),
@@ -167,6 +193,18 @@ const tools = module.exports = {
             if (!tools.isTypeAssignableTo(ourType, type)) return false
           }
           return true
+        },
+        matchUpTemplates: ({ usingType, onTemplate }) => {
+          for (const [name, type] of nameToType) {
+            type.matchUpTemplates({ usingType: usingType.data.get(name), onTemplate, })
+          }
+        },
+        fillTemplateParams: ({ getReplacement }) => {
+          const newNameToType = new Map()
+          for (const [name, type] of nameToType) {
+            newNameToType.set(name, type.fillTemplateParams({ getReplacement }))
+          }
+          return tools.types.createRecord(newNameToType)
         },
       })
     },
@@ -209,6 +247,21 @@ const tools = module.exports = {
           if (!comparePotentiallyGenericParams(bodyType, other.data.bodyType)) return false
           if (tools.getPurityLevel(purity) < tools.getPurityLevel(other.data.purity)) return false
           return true
+        },
+        matchUpTemplates: ({ usingType, onTemplate }) => {
+          paramTypes.foreach((t, i) => t.matchUpTemplates({
+            usingType: usingType.data.paramTypes[i],
+            onTemplate,
+          }))
+          bodyType.matchUpTemplates({ usingType: usingType.data.bodyType, onTemplate })
+        },
+        fillTemplateParams: ({ getReplacement }) => {
+          return tools.types.createFunction({
+            paramTypes: paramTypes.map(t => t.fillTemplateParams({ getReplacement })),
+            genericParamTypes,
+            bodyType: bodyType.fillTemplateParams({ getReplacement }),
+            purity,
+          })
         },
       })
     },

@@ -177,9 +177,9 @@ statement
 
 moduleLevelStatement
   -> "let" _ assignmentTarget _ "=" _ expr10 {%
-    ([let_,, assignmentTarget,, ,, target]) => (
-      nextNode => nodes.declaration(range(let_, target.pos), {
-        declarations: [{ assignmentTarget, target, assignmentTargetPos: DUMMY_POS }],
+    ([let_,, assignmentTarget,, ,, expr]) => (
+      nextNode => nodes.declaration(range(let_, expr.pos), {
+        declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
         expr: nextNode,
       })
     )
@@ -192,10 +192,10 @@ moduleLevelStatement
     ([function_,, nameToken,, templateDefListEntry, params,, getBodyTypeEntry, body]) => {
       const [templateParamDefList] = templateDefListEntry ?? [[]]
       const [getBodyType] = getBodyTypeEntry ?? [null]
-      const target = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, templateParamDefList })
-      const assignmentTarget = { identifier: nameToken.value, getType: null, pos: asPos(nameToken) }
+      const fn = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, templateParamDefList })
+      const assignmentTarget = nodes.assignment.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
-        declarations: [{ assignmentTarget, target, assignmentTargetPos: DUMMY_POS }],
+        declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
         expr: nextNode
       })
     }
@@ -210,8 +210,8 @@ expr10
     ([print, _, r]) => nodes.print(range(print, r.pos), { r })
   %} | ("let" _ assignmentTarget _ "=" _ expr10 _):+ "in" _ expr10 {%
     ([declarationEntries, ,, expr]) => {
-      const declarations = declarationEntries.map(([,, assignmentTarget,, ,, target]) => (
-        { assignmentTarget, target, assignmentTargetPos: DUMMY_POS }
+      const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
+        { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
       ))
       return nodes.declaration(DUMMY_POS, { declarations, expr })
     }
@@ -304,12 +304,26 @@ expr100
     }
   %}
 
-assignmentTarget
+assignmentTargetOld
   -> %identifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
       return { identifier: identifier.value, getType, pos: DUMMY_POS }
     }
+  %}
+
+assignmentTarget
+  -> %identifier (_ type):? {%
+    ([identifier, maybeGetTypeEntry]) => {
+      const [, getType] = maybeGetTypeEntry ?? []
+      return nodes.assignment.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
+    }
+  %} | "{" _ deliminated[%identifier _ ":" _ assignmentTarget _, "," _, ("," _):?] "}" {%
+    ([leftBracket,, destructureEntries, rightBracket]) => (
+      nodes.assignment.destructureObj(range(leftBracket, rightBracket), {
+        entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
+      })
+    )
   %}
 
 @{%

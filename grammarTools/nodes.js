@@ -3,6 +3,8 @@
 const { SemanticError } = require('./tools')
 const tools = require('./tools')
 
+const DUMMY_POS = tools.asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
+
 const nodes = module.exports = {
   tools,
   root: ({ module }) => ({
@@ -185,28 +187,6 @@ const nodes = module.exports = {
       },
     })
   },
-  declaration: (pos, { declarations, expr }) => tools.node({
-    pos,
-    exec: rt => {
-      for (const decl of declarations) {
-        const value = decl.target.exec(rt)
-        rt = rt.update({ scopes: [...rt.scopes, { identifier: decl.assignmentTarget.identifier, value }] })
-      }
-      return expr.exec(rt)
-    },
-    typeCheck: state => {
-      const respStates = []
-      for (const decl of declarations) {
-        const { respState, type } = decl.target.typeCheck(state)
-        respStates.push(respState)
-        const assignmentTargetType = decl.assignmentTarget.getType ? decl.assignmentTarget.getType(state, decl.assignmentTarget.pos) : null
-        if (assignmentTargetType) tools.assertType(type, assignmentTargetType, decl.target.pos)
-        const finalType = assignmentTargetType ? assignmentTargetType : type
-        state = state.addToScope(decl.assignmentTarget.identifier, finalType, decl.assignmentTargetPos)
-      }
-      return { respState: tools.mergeRespStates(...respStates), type: expr.typeCheck(state).type }
-    },
-  }),
   number: (pos, { value }) => tools.node({
     pos,
     exec: rt => tools.createValue({ raw: value, type: tools.types.int }),
@@ -284,7 +264,7 @@ const nodes = module.exports = {
       pos,
       exec: rt => tools.createValue({
         raw: {
-          params: params.map(p => p.identifier),
+          params,
           body,
           capturedScope: capturesState.map(identifier => ({ identifier, value: rt.lookupVar(identifier) })),
         },
@@ -297,7 +277,6 @@ const nodes = module.exports = {
           minPurity: purity,
           isBeginBlock: false,
         })
-        const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
 
         const genericParamTypes = []
         for (const { identifier, getConstraint, identPos, constraintPos } of templateParamDefList) {
@@ -306,14 +285,16 @@ const nodes = module.exports = {
           state = state.addToTypeScope(identifier, () => constraint, identPos)
         }
 
-        let paramTypes = []
+        const paramTypes = []
+        const respStates = []
         for (const param of params) {
-          if (!param.getType) throw new tools.TypeError('All function parameters must have a declared type', param.pos)
-          const type = param.getType(state, param.pos)
+          const { respState, type } = param.contextlessTypeCheck(state)
           paramTypes.push(type)
-          state = state.addToScope(param.identifier, type, param.pos)
+          respStates.push(respState.update({ declarations: [] }))
+          state = respState.applyDeclarations(state)
         }
         const { respState: bodyRespState, type: bodyType } = body.typeCheck(state)
+        const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
         if (requiredBodyType) tools.assertType(bodyType, requiredBodyType, pos, `This function can returns type ${bodyType.repr()} but type ${requiredBodyType.repr()} was expected.`)
         capturesState = bodyRespState.outerScopeVars
 
@@ -338,8 +319,12 @@ const nodes = module.exports = {
           purity,
         })
 
-        const newOuterScopeVars = bodyRespState.outerScopeVars.filter(ident => outerState.lookupVar(ident).fromOuterScope)
-        return { respState: bodyRespState.update({ outerScopeVars: newOuterScopeVars }), type: finalType }
+        const finalRespState = tools.mergeRespStates(...respStates, bodyRespState)
+        const newOuterScopeVars = finalRespState.outerScopeVars.filter(ident => outerState.lookupVar(ident).fromOuterScope)
+        return {
+          respState: finalRespState.update({ outerScopeVars: newOuterScopeVars }),
+          type: finalType
+        }
       },
     })
   },
@@ -352,9 +337,10 @@ const nodes = module.exports = {
       const { raw: fn } = fnExpr.exec(rt)
       rt = rt.update({ scopes: fn.capturedScope })
       const paramValues = params.map(param => param.exec(rt))
-      for (const [i, identifier] of fn.params.entries()) {
+      for (const [i, param] of fn.params.entries()) {
         const value = paramValues[i]
-        rt = rt.update({ scopes: [...rt.scopes, { identifier, value }] })
+        const allBindings = param.exec(rt, { incomingValue: value })
+        rt = rt.update({ scopes: [...rt.scopes, ...allBindings] })
       }
       try {
         return fn.body.exec(rt)
@@ -387,18 +373,20 @@ const nodes = module.exports = {
         throw new tools.TypeError(`Found ${paramTypes.length} parameter(s) but expected ${fnType.data.paramTypes.length}.`, pos)
       }
       for (let i = 0; i < fnType.data.paramTypes.length; ++i) {
-        const typeInstance = fnType.data.paramTypes[i].typeInstance
-        if (typeInstance) {
-          const templateValue = createdTemplateParams.get(typeInstance)
-          if (!templateValue) {
-            tools.assertType(paramTypes[i], fnType.data.paramTypes[i].uninstantiate(), params[i].pos)
-            createdTemplateParams.set(typeInstance, paramTypes[i])
-          } else {
-            tools.assertType(paramTypes[i], templateValue, params[i].pos)
-          }
-        } else {
-          tools.assertType(paramTypes[i], fnType.data.paramTypes[i], params[i].pos)
-        }
+        tools.assertType(paramTypes[i], fnType.data.paramTypes[i], params[i].pos)
+        fnType.data.paramTypes[i].matchUpTemplates({
+          usingType: paramTypes[i],
+          onTemplate({ self, other }) {
+            console.assert(!!self.typeInstance)
+            const templateValue = createdTemplateParams.get(self.typeInstance)
+            if (!templateValue) {
+              tools.assertType(other.uninstantiate(), self, DUMMY_POS)
+              createdTemplateParams.set(self.typeInstance, other)
+            } else {
+              tools.assertType(other, templateValue, DUMMY_POS)
+            }
+          },
+        })
       }
       if (tools.getPurityLevel(fnType.data.purity) < tools.getPurityLevel(state.minPurity)) {
         throw new tools.TypeError(`Attempted to call a function which was less pure than its containing environment.`, fnExpr.pos)
@@ -409,11 +397,14 @@ const nodes = module.exports = {
         throw new tools.SemanticError(`Attempted to do this function call with the wrong purity annotation. You must ${getPurityAnnotationMsg(fnType.data.purity)}`, pos)
       }
 
-      let returnType = fnType.data.bodyType
-      if (returnType.typeInstance) {
-        returnType = createdTemplateParams.get(returnType.typeInstance)
-        if (!returnType) throw new tools.SemanticError(`Uncertain what the return type is. Please specify it using the generic parameter list.`, pos)
-      }
+      let returnType = fnType.data.bodyType.fillTemplateParams({
+        getReplacement(type) {
+          console.assert(!!type.typeInstance)
+          const concreteType = createdTemplateParams.get(type.typeInstance)
+          if (!concreteType) throw new tools.SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it.`, pos)
+          return concreteType
+        }
+      })
       return { respState: tools.mergeRespStates(fnRespState, ...paramRespStates), type: returnType }
     },
   }),
@@ -482,5 +473,101 @@ const nodes = module.exports = {
       getType(state, typePos) // Make sure there's no errors
       return definedWithin.typeCheck(state.addToTypeScope(name, () => getType(state, typePos), pos))
     },
-  })
+  }),
+  declaration: (pos, { declarations, expr }) => tools.node({
+    pos,
+    exec: rt => {
+      for (const decl of declarations) {
+        const value = decl.expr.exec(rt)
+        const bindings = decl.assignmentTarget.exec(rt, { incomingValue: value })
+        rt = bindings.reduce((rt, { identifier, value }) => (
+          rt.update({ scopes: [...rt.scopes, { identifier, value }] })
+        ), rt)
+      }
+      return expr.exec(rt)
+    },
+    typeCheck: state => {
+      const respStates = []
+      for (const decl of declarations) {
+        const { respState, type } = decl.expr.typeCheck(state)
+        respStates.push(respState)
+        const { respState: respState2 } = decl.assignmentTarget.typeCheck(state, { incomingType: type })
+        respStates.push(respState2.update({ declarations: [] }))
+        state = respState2.applyDeclarations(state)
+      }
+      return { respState: tools.mergeRespStates(...respStates), type: expr.typeCheck(state).type }
+    },
+  }),
+
+  assignment: {
+    bind: (pos, { identifier, getTypeConstraint, identPos, typeConstraintPos }) => tools.node({
+      pos,
+      exec: (rt, { incomingValue }) => {
+        return [{ identifier, value: incomingValue }]
+      },
+      typeCheck: (state, { incomingType }) => {
+        const typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
+        if (typeConstraint) tools.assertType(incomingType, typeConstraint, DUMMY_POS)
+        const finalType = typeConstraint ? typeConstraint : incomingType
+        return {
+          respState: tools.createRespState({ declarations: [{ identifier, type: finalType, identPos }] }),
+        }
+      },
+      contextlessTypeCheck: state => {
+        if (!getTypeConstraint) throw new tools.TypeError('All function parameters must have a declared type', pos)
+        const typeConstraint = getTypeConstraint(state, typeConstraintPos)
+        return {
+          respState: tools.createRespState({ declarations: [{ identifier, type: typeConstraint, identPos }] }),
+          type: typeConstraint,
+        }
+      }
+    }),
+    destructureObj: (pos, { entries }) => {
+      let finalType
+      return tools.node({
+        pos,
+        exec: (rt, { incomingValue }) => {
+          const allBindings = []
+          for (const [identifier, assignmentTarget] of entries) {
+            const innerValue = incomingValue.raw.get(identifier)
+            const bindings = assignmentTarget.exec(rt, { incomingValue: innerValue })
+            allBindings.push(...bindings)
+            rt = bindings.reduce((rt, { identifier, value }) => (
+              rt.update({ scopes: [...rt.scopes, { identifier, value }] })
+            ), rt)
+          }
+          return allBindings
+        },
+        typeCheck: (state, { incomingType }) => {
+          finalType = incomingType
+          tools.assertType(incomingType, tools.types.createRecord(new Map()), incomingType.pos, `Found type ${incomingType.repr()} but expected a record.`)
+          const respStates = []
+          for (const [identifier, assignmentTarget] of entries) {
+            const valueType = incomingType.data.get(identifier)
+            if (!valueType) throw new tools.types.TypeError(`Unable to destructure property ${identifier} from type ${incomingType.repr()}`, DUMMY_POS)
+            const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType })
+            respStates.push(respState)
+            state = respState.applyDeclarations(state)
+          }
+          return {
+            respState: tools.mergeRespStates(...respStates),
+          }
+        },
+        contextlessTypeCheck: state => {
+          const respStates = []
+          const nameToType = new Map()
+          for (const [identifier, assignmentTarget] of entries) {
+            const { respState, type } = assignmentTarget.contextlessTypeCheck(state)
+            respStates.push(respState)
+            state = respState.applyDeclarations(state)
+            nameToType.set(identifier, type)
+          }
+          return {
+            respState: tools.mergeRespStates(...respStates),
+            type: tools.types.createRecord(nameToType),
+          }
+        },
+      })
+    },
+  },
 }
