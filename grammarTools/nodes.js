@@ -4,6 +4,7 @@ const { SemanticError } = require('./tools')
 const tools = require('./tools')
 
 const DUMMY_POS = tools.asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
+const undeterminedType = Symbol('Undetermined Type')
 
 const nodes = module.exports = {
   tools,
@@ -181,7 +182,7 @@ const nodes = module.exports = {
         const { respState, type } = expr.typeCheck(state)
         finalType = getType(state, typePos)
         if (!tools.isTypeAssignableTo(finalType, type) && !tools.isTypeAssignableTo(type, finalType)) {
-          throw new tools.SemanticError(`Attempted to change a type from "${type.repr()}" to type "${finalType.repr()}". "as" type assertions can only widen or narrow a provided type. If you wish to completely change the type, you can do so in two steps with "yourValue as #unknown as #yourDesiredType".`, operatorAndTypePos)
+          throw new tools.SemanticError(`Attempted to change a type from "${type.repr()}" to type "${finalType.repr()}". "as" type assertions can only widen or narrow a provided type.`, operatorAndTypePos)
         }
         return { respState, type: finalType }
       },
@@ -443,12 +444,39 @@ const nodes = module.exports = {
       const { respState: ifSoRespState, type: ifSoType } = ifSo.typeCheck(state)
       const { respState: ifNotRespState, type: ifNotType } = ifNot.typeCheck(state)
 
-      let biggerType
-      if (tools.isTypeAssignableTo(ifNotType, ifSoType)) biggerType = ifSoType
-      else if (tools.isTypeAssignableTo(ifSoType, ifNotType)) biggerType = ifNotType
-      else throw new SemanticError(`The following "if true" case of this condition has the type "${ifSoType.repr()}", which is incompatible with the "if not" case's type, "${ifNotType.repr()}".`, ifSo.pos)
-
+      const biggerType = tools.getWiderType(ifSoType, ifNotType, `The following "if true" case of this condition has the type "${ifSoType.repr()}", which is incompatible with the "if not" case's type, "${ifNotType.repr()}".`, ifSo.pos)
       return { respState: tools.mergeRespStates(condRespState, ifSoRespState, ifNotRespState), type: biggerType }
+    },
+  }),
+  match: (pos, { matchValue, matchArms }) => tools.node({
+    pos,
+    exec: rt => {
+      const value = matchValue.exec(rt)
+      for (const { pattern, body } of matchArms) {
+        const maybeBindings = pattern.exec(rt, { incomingValue: value, allowFailure: true })
+        if (maybeBindings) {
+          rt = rt.update({ scopes: [...rt.scopes, ...maybeBindings] })
+          return body.exec(rt)
+        }
+      }
+      throw new tools.RuntimeError('No patterns matched.')
+    },
+    typeCheck: state => {
+      const { respState, type } = matchValue.typeCheck(state)
+      const respStates = [respState]
+      let overallType = null
+      for (const { pattern, body } of matchArms) {
+        const { respState: respState2 } = pattern.typeCheck(state, { incomingType: type, allowWidening: true })
+        respStates.push(respState2.update({ declarations: [] }))
+        const bodyState = respState2.applyDeclarations(state)
+        const bodyType = body.typeCheck(bodyState).type
+        if (!overallType) {
+          overallType = bodyType
+          continue
+        }
+        overallType = tools.getWiderType(overallType, bodyType, `The following match arm's result has the type "${bodyType.repr()}", which is incompatible with the type of previous match arms, "${overallType.repr()}".`, DUMMY_POS)
+      }
+      return { respState: tools.mergeRespStates(...respStates), type: overallType }
     },
   }),
   identifier: (pos, { identifier }) => tools.node({
@@ -500,74 +528,126 @@ const nodes = module.exports = {
   }),
 
   assignment: {
-    bind: (pos, { identifier, getTypeConstraint, identPos, typeConstraintPos }) => tools.node({
-      pos,
-      exec: (rt, { incomingValue }) => {
-        return [{ identifier, value: incomingValue }]
-      },
-      typeCheck: (state, { incomingType }) => {
-        const typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
-        if (typeConstraint) tools.assertType(incomingType, typeConstraint, DUMMY_POS)
-        const finalType = typeConstraint ? typeConstraint : incomingType
-        return {
-          respState: tools.createRespState({ declarations: [{ identifier, type: finalType, identPos }] }),
-        }
-      },
-      contextlessTypeCheck: state => {
-        if (!getTypeConstraint) throw new tools.TypeError('All function parameters must have a declared type', pos)
-        const typeConstraint = getTypeConstraint(state, typeConstraintPos)
-        return {
-          respState: tools.createRespState({ declarations: [{ identifier, type: typeConstraint, identPos }] }),
-          type: typeConstraint,
-        }
-      }
-    }),
-    destructureObj: (pos, { entries }) => {
-      let finalType
+    bind: (pos, { identifier, getTypeConstraint, identPos, typeConstraintPos }) => {
+      let typeConstraint
       return tools.node({
         pos,
-        exec: (rt, { incomingValue }) => {
-          const allBindings = []
-          for (const [identifier, assignmentTarget] of entries) {
-            const innerValue = incomingValue.raw.get(identifier)
-            const bindings = assignmentTarget.exec(rt, { incomingValue: innerValue })
-            allBindings.push(...bindings)
-            rt = bindings.reduce((rt, { identifier, value }) => (
-              rt.update({ scopes: [...rt.scopes, { identifier, value }] })
-            ), rt)
+        exec: (rt, { incomingValue, allowFailure = false }) => {
+          if (typeConstraint && !tools.isTypeAssignableTo(incomingValue.type, typeConstraint)) {
+            if (allowFailure) return null
+            throw new Error('Unreachable: Type mismatch when binding.')
           }
-          return allBindings
+          return [{ identifier, value: incomingValue }]
         },
-        typeCheck: (state, { incomingType }) => {
-          finalType = incomingType
-          tools.assertType(incomingType, tools.types.createRecord(new Map()), incomingType.pos, `Found type ${incomingType.repr()} but expected a record.`)
-          const respStates = []
-          for (const [identifier, assignmentTarget] of entries) {
-            const valueType = incomingType.data.get(identifier)
-            if (!valueType) throw new tools.types.TypeError(`Unable to destructure property ${identifier} from type ${incomingType.repr()}`, DUMMY_POS)
-            const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType })
-            respStates.push(respState)
-            state = respState.applyDeclarations(state)
+        typeCheck: (state, { incomingType, allowWidening = false }) => {
+          // incomingType may be set to undeterminedType
+          typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
+          if (incomingType === undeterminedType && !typeConstraint) throw new tools.SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
+          if (typeConstraint && incomingType !== undeterminedType && !tools.isTypeAssignableTo(incomingType, typeConstraint)) {
+            if (!allowWidening) {
+              throw new tools.TypeError(`Found type "${incomingType.repr()}", but expected type "${typeConstraint.repr()}".`, DUMMY_POS)
+            } else if (allowWidening && !tools.isTypeAssignableTo(typeConstraint, incomingType)) {
+              throw new tools.SemanticError(`Attempted to change a type from "${incomingType.repr()}" to type "${typeConstraint.repr()}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
+            }
           }
+          const finalType = typeConstraint ? typeConstraint : incomingType
           return {
-            respState: tools.mergeRespStates(...respStates),
+            respState: tools.createRespState({ declarations: [{ identifier, type: finalType, identPos }] }),
           }
         },
         contextlessTypeCheck: state => {
-          const respStates = []
-          const nameToType = new Map()
-          for (const [identifier, assignmentTarget] of entries) {
-            const { respState, type } = assignmentTarget.contextlessTypeCheck(state)
-            respStates.push(respState)
-            state = respState.applyDeclarations(state)
-            nameToType.set(identifier, type)
-          }
+          if (!getTypeConstraint) throw new tools.TypeError('All function parameters must have a declared type', pos)
+          const typeConstraint = getTypeConstraint(state, typeConstraintPos)
           return {
-            respState: tools.mergeRespStates(...respStates),
-            type: tools.types.createRecord(nameToType),
+            respState: tools.createRespState({ declarations: [{ identifier, type: typeConstraint, identPos }] }),
+            type: typeConstraint,
           }
-        },
+        }
       })
     },
+    destructureObj: (pos, { entries }) => tools.node({
+      pos,
+      exec: (rt, { incomingValue, allowFailure = false }) => {
+        const allBindings = []
+        for (const [identifier, assignmentTarget] of entries) {
+          if (tools.isUnknownType(incomingValue.type)) return null
+          const innerValue = incomingValue.raw.get(identifier)
+          if (!innerValue) return null
+          const bindings = assignmentTarget.exec(rt, { incomingValue: innerValue, allowFailure })
+          if (!bindings) return null
+          allBindings.push(...bindings)
+          rt = bindings.reduce((rt, { identifier, value }) => (
+            rt.update({ scopes: [...rt.scopes, { identifier, value }] })
+          ), rt)
+        }
+        return allBindings
+      },
+      typeCheck: (state, { incomingType, allowWidening = false }) => {
+        // incomingType may be set to undeterminedType
+        if (incomingType !== undeterminedType) tools.assertType(incomingType, tools.types.createRecord(new Map()), incomingType.pos, `Found type ${incomingType.repr()} but expected a record.`)
+        const respStates = []
+        for (const [identifier, assignmentTarget] of entries) {
+          let valueType = incomingType === undeterminedType || tools.isNeverType(incomingType)
+            ? incomingType
+            : incomingType.data.get(identifier)
+          if (!valueType && allowWidening) valueType = undeterminedType
+          if (!valueType) throw new tools.types.TypeError(`Unable to destructure property ${identifier} from type ${incomingType.repr()}`, DUMMY_POS)
+          const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType, allowWidening })
+          respStates.push(respState)
+          state = respState.applyDeclarations(state)
+        }
+        return {
+          respState: tools.mergeRespStates(...respStates),
+        }
+      },
+      contextlessTypeCheck: state => {
+        const respStates = []
+        const nameToType = new Map()
+        for (const [identifier, assignmentTarget] of entries) {
+          const { respState, type } = assignmentTarget.contextlessTypeCheck(state)
+          respStates.push(respState)
+          state = respState.applyDeclarations(state)
+          nameToType.set(identifier, type)
+        }
+        return {
+          respState: tools.mergeRespStates(...respStates),
+          type: tools.types.createRecord(nameToType),
+        }
+      },
+    }),
+    valueConstraint: (pos, { assignmentTarget, constraint }) => tools.node({
+      pos,
+      exec: (rt, { incomingValue, allowFailure = false }) => {
+        const bindings = assignmentTarget.exec(rt, { incomingValue, allowFailure })
+        if (!bindings) return null
+        rt = rt.update({ scopes: [...rt.scopes, ...bindings] })
+        const success = constraint.exec(rt)
+        if (!success.raw) {
+          if (allowFailure) return null
+          throw new tools.RuntimeError('Value Constraint failed.')
+        }
+        return bindings
+      },
+      typeCheck: (state, { incomingType, allowWidening = false }) => {
+        // incomingType may be set to undeterminedType
+        const { respState } = assignmentTarget.typeCheck(state, { incomingType, allowWidening })
+        state = respState.applyDeclarations(state)
+        const { respState: respState2, type } = constraint.typeCheck(state)
+        tools.assertType(type, tools.types.boolean, DUMMY_POS)
+        return {
+          respState: tools.mergeRespStates(respState, respState2)
+        }
+      },
+      contextlessTypeCheck: state => {
+        const { respState, type } = assignmentTarget.contextlessTypeCheck(state, { incomingType, allowWidening })
+        state = respState.applyDeclarations(state)
+        const { respState: respState2, type: type2 } = constraint.typeCheck(state)
+        tools.assertType(type2, tools.types.boolean, DUMMY_POS)
+        return {
+          respState: tools.mergeRespStates(respState, respState2),
+          type,
+        }
+      }
+    }),
   },
 }

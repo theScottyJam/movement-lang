@@ -84,8 +84,13 @@
       'alias': 'alias',
       'as': 'as',
       'of': 'of',
+      'match': 'match',
+      'when': 'when',
+      'where': 'where',
+      'end': 'end',
+      
 
-      'identifier': /[a-zA-Z][a-zA-Z0-9]*/,
+      'identifier': /\$|[a-zA-Z][a-zA-Z0-9]*/,
       '#gets': '#gets',
       '#function': '#function',
       simpleType: /\#[a-z][a-zA-Z0-9]*/,
@@ -302,23 +307,32 @@ expr100
       }
       return nodes.record(DUMMY_POS, { content })
     }
-  %}
-
-assignmentTargetOld
-  -> %identifier (_ type):? {%
-    ([identifier, maybeGetTypeEntry]) => {
-      const [, getType] = maybeGetTypeEntry ?? []
-      return { identifier: identifier.value, getType, pos: DUMMY_POS }
+  %} | "match" _ expr10 _ ("when" _ pattern10 _ "then" _ expr10 _):+ "end" {%
+    ([,, matchValue,, rawMatchArms, ]) => {
+      const matchArms = rawMatchArms.map(([,, pattern,, ,, body]) => ({ pattern, body }))
+      return nodes.match(DUMMY_POS, { matchValue, matchArms })
     }
   %}
 
-assignmentTarget
+assignmentTarget -> pattern10 {% id %}
+
+pattern10
+  -> pattern10 _ "where" _ expr10 {%
+    ([pattern,, ,, constraint]) => nodes.assignment.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
+  %} | pattern20 {% id %}
+
+pattern20
+  -> pattern30 _ ">" _ expr10 {%
+    ([pattern,, ,, constraint]) => { throw new Error('Not Implemented!') } // Can't be done until comparison type classes are done.
+  %} | pattern30 {% id %}
+
+pattern30
   -> %identifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
       return nodes.assignment.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
     }
-  %} | "{" _ deliminated[%identifier _ ":" _ assignmentTarget _, "," _, ("," _):?] "}" {%
+  %} | "{" _ deliminated[%identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     ([leftBracket,, destructureEntries, rightBracket]) => (
       nodes.assignment.destructureObj(range(leftBracket, rightBracket), {
         entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))

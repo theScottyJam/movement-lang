@@ -46,6 +46,8 @@ const truncate = (msg, amount=100) => {
   return msg.slice(0, amount - 1) + '…'
 }
 
+const DUMMY_POS = { [isPos]: true, line: 1, col: 1, length: 0, offset: 0 }
+
 const tools = module.exports = {
   anyParams: Symbol('Any Params'), // temporary
   asPos: token => token.text == null
@@ -114,6 +116,7 @@ const tools = module.exports = {
       })
     },
     addToScope(identifier, type, pos) {
+      if (identifier === '$') return this
       const newScope = new Map(top(scopes))
       if (newScope.has(identifier)) {
         throw new tools.SemanticError(`Identifier "${identifier}" already exists in scope, please choose a different name.`, pos)
@@ -128,6 +131,7 @@ const tools = module.exports = {
       // createType() is a function and not a plain type, so that unknown types can be added
       // to the scope, and each reference to the unknown type will produce a unique unknown instance
       // preventing you from assigning one unknown type to another.
+      if (identifier === '$') return this
       const newScope = new Map(top(definedTypes))
       if (newScope.has(identifier)) {
         throw new tools.SemanticError(`Identifier "${identifier}" already exists in scope, please choose a different name.`, pos)
@@ -296,6 +300,11 @@ const tools = module.exports = {
     if (!tools.isTypeAssignableTo(type, expectedType)) {
       throw new tools.TypeError(message ?? `Found type "${type.repr()}", but expected type "${expectedType.repr()}".`, pos)
     }
+  },
+  getWiderType: (type1, type2, errMessage, errPos) => {
+    if (tools.isTypeAssignableTo(type2, type1)) return type1
+    else if (tools.isTypeAssignableTo(type1, type2)) return type2
+    else throw new tools.SemanticError(errMessage, errPos)
   },
   isNeverType: (type) => {
     return type.typeSentinel === tools.types.never.typeSentinel

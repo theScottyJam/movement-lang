@@ -8,7 +8,6 @@ globalThis.debug = (...args) => {
 const { run } = require('./parser')
 
 run(`\
-let f = <#T>(x #T) #T => x
-let x = f(2)
-print if true then x else 'x'
+let { x: x } where x == 2 = { x: 2 }
+print x
 `)
