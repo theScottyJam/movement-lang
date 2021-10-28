@@ -1,8 +1,7 @@
-'use strict'
-
-const nearley = require("nearley");
-const grammarTools = require('./grammarTools')
-const builtGrammar = require('./grammar.built')
+import nearley from 'nearley'
+import grammarTools from './grammarTools/index.js'
+const { nodes } = grammarTools
+import builtGrammar from './grammar.built.js'
 
 const parser = new nearley.Parser(nearley.Grammar.fromCompiled(builtGrammar));
 
@@ -15,7 +14,7 @@ const termColors = {
 
 function parse(text) {
   parser.feed(text)
-  if (parser.results.length === 0) throw new tools.SyntaxError('Unexpected end-of-file.', null)
+  if (parser.results.length === 0) throw new nodes.tools.SyntaxError('Unexpected end-of-file.', null)
   if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
   return parser.results[0]
 }
@@ -63,7 +62,7 @@ function printPosition(text, pos) {
   console.error(bold + yellow + underline + reset)
 }
 
-exports.run = function run(text) {
+export function run(text) {
   let ast
 
   try {
@@ -93,12 +92,7 @@ exports.run = function run(text) {
   try {
     ast.typeCheck()
   } catch (err) {
-    if (err instanceof grammarTools.TypeError) {
-      const { lightRed, reset } = termColors
-      console.error(lightRed + 'Type Error: ' + reset + err.message)
-      printPosition(text, err.pos)
-      return
-    } else if (err instanceof grammarTools.SemanticError) {
+    if (err instanceof grammarTools.SemanticError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Semantic Error: ' + reset + err.message)
       printPosition(text, err.pos)
@@ -111,7 +105,7 @@ exports.run = function run(text) {
   ast.exec()
 }
 
-exports.testRun = function testRun(text) {
+export function testRun(text) {
   let result = []
   const debugOutput = value => result.push(value)
 

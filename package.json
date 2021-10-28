@@ -3,17 +3,21 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "nearleyc grammar.ne -o grammar.built.js && node index.js",
+    "start": "nearleyc grammar.ne -o grammar.built.ts && node --loader ts-node/esm ./index.ts",
     "test": "jest"
   },
   "author": "thescottyjam <theScottyJam@gmail.com>",
   "license": "MIT",
   "dependencies": {
+    "@types/moo": "^0.5.5",
     "moo": "^0.5.1",
-    "nearley": "^2.20.1"
+    "nearley": "^2.20.1",
+    "ts-node": "^10.2.1"
   },
   "devDependencies": {
-    "jest": "^27.0.6"
+    "jest": "^27.0.6",
+    "typescript": "^4.4.3"
   }
 }

@@ -10,25 +10,27 @@
 # expr90: '.'
 # expr100: Things that don't require an order of operations, like literals
 
+@preprocessor typescript
+
 @{%
-  const { nodes } = require('./grammarTools')
+  import grammarTools from './grammarTools/index.js'
+  import moo from 'moo'
+
+  const { nodes } = grammarTools
   const { tools } = nodes
   const { asPos, range } = tools
   const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
 %}
 
 @{%
-  const moo = require("moo")
-
   const lexer = moo.states({
     main: {
-      comment: /\/\/.*/,
-      whitespace: /[ \t]+/,
-      newLine: {match: '\n', lineBreaks: true},
+      'comment': /\/\/.*/,
+      'whitespace': /[ \t]+/,
+      'newLine': {match: '\n', lineBreaks: true},
 
-      number: /\d+/,
-      boolean: ['true', 'false'],
-      stringStart: {match: "'", push: 'string'},
+      'boolean': ['true', 'false'],
+      'stringStart': {match: "'", push: 'string'},
 
       '+': '+',
       '-': '-',
@@ -70,6 +72,7 @@
       '<': '<',
       '>': '>',
       ':': ':',
+      '@': '@',
 
       'if': 'if',
       'then': 'then',
@@ -87,17 +90,20 @@
       'match': 'match',
       'when': 'when',
       'where': 'where',
-      'end': 'end',
-      
+      'tag': 'tag',
+      'variant': 'variant',
 
-      'identifier': /\$|[a-zA-Z][a-zA-Z0-9]*/,
+      'upperIdentifier': /[A-Z][a-zA-Z0-9]*_*/,
+      'nonUpperIdentifier': /[a-z][a-zA-Z0-9]*_*|[0-9][a-zA-Z0-9]*_+/,
+      '$': '$',
+      'number': /\d+/,
       '#gets': '#gets',
       '#function': '#function',
-      simpleType: /\#[a-z][a-zA-Z0-9]*/,
-      userType: /\#[A-Z][a-zA-Z0-9]*/,
+      'simpleType': /\#[a-z][a-zA-Z0-9]*/,
+      'userType': /\#[A-Z][a-zA-Z0-9]*/,
       '#': '#',
 
-      impossible: /^\b$/,
+      'impossible': /^\b$/,
     },
     string: {
       stringContent: /(?:\\.|[^'\n])+/,
@@ -193,11 +199,11 @@ moduleLevelStatement
       nodes.print(range(print, r.pos), { r }),
       nextNode,
     ])
-  %} | "function" _ %identifier _ (templateParamDefList _):? argDefList _ (type _):? block {%
-    ([function_,, nameToken,, templateDefListEntry, params,, getBodyTypeEntry, body]) => {
-      const [templateParamDefList] = templateDefListEntry ?? [[]]
+  %} | "function" _ identifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
+    ([function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
+      const [genericParamDefList] = genericDefListEntry ?? [[]]
       const [getBodyType] = getBodyTypeEntry ?? [null]
-      const fn = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, templateParamDefList })
+      const fn = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, genericParamDefList })
       const assignmentTarget = nodes.assignment.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
@@ -222,12 +228,12 @@ expr10
     }
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
-  %} | (%gets _):? (templateParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
-    ([getsEntry, templateParamDefListEntry, argDefList,, getBodyTypeEntry, ,, body]) => {
+  %} | (%gets _):? (genericParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
+    ([getsEntry, genericParamDefListEntry, argDefList,, getBodyTypeEntry, ,, body]) => {
       const purity = getsEntry == null ? tools.PURITY.pure : tools.PURITY.gets
-      const [templateParamDefList] = templateParamDefListEntry ?? [[]]
+      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
       const [getBodyType] = getBodyTypeEntry ?? [null]
-      return nodes.function(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, templateParamDefList })
+      return nodes.function(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
     }
   %} | expr20 {% id %}
 
@@ -269,20 +275,20 @@ expr70
   %} | expr80 {% id %}
 
 expr80
-  -> expr80 _ (templateParamList _):? "(" _ deliminated[expr10, "," _, ("," _):?] ")" {%
-    ([fnExpr,, templateParamListEntry, ,, params]) => {
-      const [templateParams] = templateParamListEntry ?? [[]]
-      return nodes.invoke(DUMMY_POS, { fnExpr, templateParams, params: params.flat() })
+  -> expr80 _ (genericParamList _):? "(" _ deliminated[expr10, "," _, ("," _):?] ")" {%
+    ([fnExpr,, genericParamListEntry, ,, params]) => {
+      const [genericParams] = genericParamListEntry ?? [[]]
+      return nodes.invoke(DUMMY_POS, { fnExpr, genericParams, params: params.flat() })
     }
   %} | expr90 {% id %}
 
-  templateParamList
+  genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
       ([,, entries]) => entries.map(([getType]) => ({ getType, loc: DUMMY_POS }))
     %}
 
 expr90
-  -> expr90 _ "." _ %identifier {%
+  -> expr90 _ "." _ identifier {%
     ([expr,, ,,identifierToken]) => nodes['.'](range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
   %} | expr100 {% id %}
 
@@ -291,11 +297,11 @@ expr100
     ([token]) => nodes.number(asPos(token), { value: BigInt(token.value) })
   %} | %boolean {%
     ([token]) => nodes.boolean(asPos(token), { value: token.value === 'true' })
-  %} | %identifier {%
+  %} | identifier {%
     ([token]) => nodes.identifier(asPos(token), { identifier: token.value })
   %} | %stringStart %stringContent:? %stringEnd {%
     ([start, contentEntry, end]) => nodes.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
-  %} | "{" _ deliminated[%identifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
+  %} | "{" _ deliminated[identifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     ([,, entries, ]) => {
       const content = new Map()
       for (const [identifier, typeEntry,, ,, target] of entries) {
@@ -307,10 +313,16 @@ expr100
       }
       return nodes.record(DUMMY_POS, { content })
     }
-  %} | "match" _ expr10 _ ("when" _ pattern10 _ "then" _ expr10 _):+ "end" {%
-    ([,, matchValue,, rawMatchArms, ]) => {
+  %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 _):+ "}" {%
+    ([,, matchValue,, ,, rawMatchArms, ]) => {
       const matchArms = rawMatchArms.map(([,, pattern,, ,, body]) => ({ pattern, body }))
       return nodes.match(DUMMY_POS, { matchValue, matchArms })
+    }
+  %} | %impossible "tag" _ (genericParamDefList _):? type {%
+    // UNFINISHED (also probably should rename genericParamDefList to genericDefList)
+    ([,,genericDefEntry, getType]) => {
+      const [genericParamDefList] = genericDefEntry ?? [null]
+      nodes.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
     }
   %}
 
@@ -327,12 +339,12 @@ pattern20
   %} | pattern30 {% id %}
 
 pattern30
-  -> %identifier (_ type):? {%
+  -> identifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
       return nodes.assignment.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
     }
-  %} | "{" _ deliminated[%identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
+  %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     ([leftBracket,, destructureEntries, rightBracket]) => (
       nodes.assignment.destructureObj(range(leftBracket, rightBracket), {
         entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
@@ -341,9 +353,9 @@ pattern30
   %}
 
 @{%
-  const createFnTypeGetter = ({ purity, templateParamDefList, paramTypeGetters, getBodyType }) => (state, pos) => {
+  const createFnTypeGetter = ({ purity, genericParamDefList, paramTypeGetters, getBodyType }) => (state, pos) => {
     let constraints = []
-    for (const { identifier, getConstraint, identPos, constraintPos } of templateParamDefList) {
+    for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
       const constraint = getConstraint(state, constraintPos).asNewInstance()
       constraints.push(constraint)
       state = state.addToTypeScope(identifier, () => constraint, identPos)
@@ -374,7 +386,7 @@ type
       else if (token.value === '#unknown') return () => tools.types.unknown
       else throw new tools.SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
     }
-  %} | "#" "{" _ deliminated[%identifier _ type _, "," _, ("," _):?] "}" {%
+  %} | "#" "{" _ deliminated[identifier _ type _, "," _, ("," _):?] "}" {%
     ([, ,, entries, ]) => {
       const content = new Map()
       for (const [identifierToken,, getType] of entries) {
@@ -385,17 +397,17 @@ type
       }
       return (state, pos) => tools.types.createRecord(tools.mapMapValues(content, getType => getType(state, pos)))
     }
-  %} | ("#gets" _ | "#") (templateParamDefList _):? typeList _ "=>" _ type {%
-    ([[callModifierToken], templateParamDefListEntry, paramTypeGetters,, ,, getBodyType]) => {
+  %} | ("#gets" _ | "#") (genericParamDefList _):? typeList _ "=>" _ type {%
+    ([[callModifierToken], genericParamDefListEntry, paramTypeGetters,, ,, getBodyType]) => {
       const purity = callModifierToken.value === '#gets' ? tools.PURITY.gets : tools.PURITY.pure
-      const [templateParamDefList] = templateParamDefListEntry ?? [[]]
-      return createFnTypeGetter({ purity, templateParamDefList, paramTypeGetters, getBodyType })
+      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
+      return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
     }
-  %} | "#function" _ (templateParamDefList _):? typeList _ type {%
-    ([,, templateParamDefListEntry, paramTypeGetters,, getBodyType]) => {
+  %} | "#function" _ (genericParamDefList _):? typeList _ type {%
+    ([,, genericParamDefListEntry, paramTypeGetters,, getBodyType]) => {
       const purity = tools.PURITY.none
-      const [templateParamDefList] = templateParamDefListEntry ?? [[]]
-      return createFnTypeGetter({ purity, templateParamDefList, paramTypeGetters, getBodyType })
+      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
+      return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
     }
   %}
 
@@ -409,7 +421,7 @@ argDefList
     ([,, entries]) => entries.map(([assignmentTarget]) => assignmentTarget)
   %}
 
-templateParamDefList
+genericParamDefList
   -> "<" _ nonEmptyDeliminated[%userType _ (%of _ type _):?, "," _, ("," _):?] ">" {%
     ([,, entries]) => (
       entries.map(([identifier,, typeEntry]) => {
@@ -418,6 +430,11 @@ templateParamDefList
       })
     )
   %}
+
+identifier
+  -> %upperIdentifier {% id %}
+  | %nonUpperIdentifier {% id %}
+  | "$" {% id %}
 
 ignore -> %impossible:? {% () => null %}
 

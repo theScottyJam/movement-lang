@@ -1,67 +1,67 @@
 'use strict'
 
-const { SemanticError } = require('./tools')
-const tools = require('./tools')
+const { SemanticError } = require('./tools.cjs')
+const tools = require('./tools.cjs')
 
 const DUMMY_POS = tools.asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
 const undeterminedType = Symbol('Undetermined Type')
 
 const nodes = module.exports = {
   tools,
-  root: ({ module }) => ({
-    exec: () => {
-      const rt = tools.createRuntime()
-      return module.exec(rt)
-    },
-    typeCheck: () => {
-      const state = tools.createTypeState()
-      module.typeCheck(state)
-    }
-  }),
-  beginBlock: (pos, content) => ({
-    pos,
-    exec: rt => content.exec(rt),
-    typeCheck: state => (
-      content.typeCheck(state.update({
-        minPurity: tools.PURITY.none,
-        isBeginBlock: true,
-      }))
-    ),
-  }),
-  block: (pos, { content }) => ({
-    pos,
-    exec: rt => {
-      content.exec(rt)
-      return tools.createValue({ type: tools.types.unit, raw: null })
-    },
-    typeCheck: state => {
-      const { respState, type: contentType } = content.typeCheck(state)
-      const type = tools.isNeverType(contentType) ? tools.types.never : tools.types.unit
-      return { respState, type }
-    },
-  }),
-  sequence: (statements) => tools.node({
-    exec: rt => {
-      statements.forEach(statement => statement.exec(rt))
-      return null
-    },
-    typeCheck: state => {
-      const typeChecks = statements.map(statement => statement.typeCheck(state))
-      const respStates = typeChecks.map(x => x.respState)
-      const type = typeChecks.find(x => tools.isNeverType(x.type)) ? tools.types.never : tools.types.unit
-      return { respState: tools.mergeRespStates(...respStates), type }
-    },
-  }),
-  noop: () => nodes.sequence([]),
-  print: (pos, { r }) => tools.node({
-    pos,
-    exec: rt => {
-      const value = r.exec(rt)
-      tools.showDebugOutput(value)
-      return value
-    },
-    typeCheck: state => r.typeCheck(state)
-  }),
+  // root: ({ module }) => ({
+  //   exec: () => {
+  //     const rt = tools.createRuntime()
+  //     return module.exec(rt)
+  //   },
+  //   typeCheck: () => {
+  //     const state = tools.createTypeState()
+  //     module.typeCheck(state)
+  //   }
+  // }),
+  // beginBlock: (pos, content) => ({
+  //   pos,
+  //   exec: rt => content.exec(rt),
+  //   typeCheck: state => (
+  //     content.typeCheck(state.update({
+  //       minPurity: tools.PURITY.none,
+  //       isBeginBlock: true,
+  //     }))
+  //   ),
+  // }),
+  // block: (pos, { content }) => ({
+  //   pos,
+  //   exec: rt => {
+  //     content.exec(rt)
+  //     return tools.createValue({ type: tools.types.unit, raw: null })
+  //   },
+  //   typeCheck: state => {
+  //     const { respState, type: contentType } = content.typeCheck(state)
+  //     const type = tools.isNeverType(contentType) ? tools.types.never : tools.types.unit
+  //     return { respState, type }
+  //   },
+  // }),
+  // sequence: (statements) => tools.node({
+  //   exec: rt => {
+  //     statements.forEach(statement => statement.exec(rt))
+  //     return null
+  //   },
+  //   typeCheck: state => {
+  //     const typeChecks = statements.map(statement => statement.typeCheck(state))
+  //     const respStates = typeChecks.map(x => x.respState)
+  //     const type = typeChecks.find(x => tools.isNeverType(x.type)) ? tools.types.never : tools.types.unit
+  //     return { respState: tools.mergeRespStates(...respStates), type }
+  //   },
+  // }),
+  // noop: () => nodes.sequence([]),
+  // print: (pos, { r }) => tools.node({
+  //   pos,
+  //   exec: rt => {
+  //     const value = r.exec(rt)
+  //     tools.showDebugOutput(value)
+  //     return value
+  //   },
+  //   typeCheck: state => r.typeCheck(state)
+  // }),
   '==': (pos, { l, r }) => {
     let finalType
     return tools.node({
@@ -92,21 +92,21 @@ const nodes = module.exports = {
       },
     })
   },
-  '+': (pos, { l, r }) => {
-    let finalType
-    return tools.node({
-      pos,
-      exec: rt => tools.createValue({ type: finalType, raw: l.exec(rt).raw + r.exec(rt).raw }),
-      typeCheck: state => {
-        const { respState: lRespState, type: lType } = l.typeCheck(state)
-        const { respState: rRespState, type: rType } = r.typeCheck(state)
-        tools.assertType(lType, tools.types.int, l.pos)
-        tools.assertType(rType, tools.types.int, r.pos)
-        finalType = tools.types.int
-        return { respState: tools.mergeRespStates(lRespState, rRespState), type: finalType }
-      },
-    })
-  },
+  // '+': (pos, { l, r }) => {
+  //   let finalType
+  //   return tools.node({
+  //     pos,
+  //     exec: rt => tools.createValue({ type: finalType, raw: l.exec(rt).raw + r.exec(rt).raw }),
+  //     typeCheck: state => {
+  //       const { respState: lRespState, type: lType } = l.typeCheck(state)
+  //       const { respState: rRespState, type: rType } = r.typeCheck(state)
+  //       tools.assertType(lType, tools.types.int, l.pos)
+  //       tools.assertType(rType, tools.types.int, r.pos)
+  //       finalType = tools.types.int
+  //       return { respState: tools.mergeRespStates(lRespState, rRespState), type: finalType }
+  //     },
+  //   })
+  // },
   '-': (pos, { l, r }) => {
     let finalType
     return tools.node({
@@ -258,7 +258,7 @@ const nodes = module.exports = {
       },
     })
   },
-  function: (pos, { params, body, getBodyType, bodyTypePos, purity, templateParamDefList }) => {
+  function: (pos, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }) => {
     let capturesState
     let finalType
     return tools.node({
@@ -280,7 +280,7 @@ const nodes = module.exports = {
         })
 
         const genericParamTypes = []
-        for (const { identifier, getConstraint, identPos, constraintPos } of templateParamDefList) {
+        for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
           const constraint = getConstraint(state, constraintPos).asNewInstance()
           genericParamTypes.push(constraint)
           state = state.addToTypeScope(identifier, () => constraint, identPos)
@@ -329,7 +329,7 @@ const nodes = module.exports = {
       },
     })
   },
-  invoke: (pos, { fnExpr, templateParams, params }) => tools.node({
+  invoke: (pos, { fnExpr, genericParams, params }) => tools.node({
     pos,
     data: {
       type: 'INVOKE',
@@ -354,15 +354,15 @@ const nodes = module.exports = {
     typeCheck: (state, { callWithPurity = tools.PURITY.pure } = {}) => {
       const { respState: fnRespState, type: fnType } = fnExpr.typeCheck(state)
   
-      if (templateParams.length > fnType.data.genericParamTypes.length) {
-        throw new tools.SemanticError(`The function of type ${fnType.repr()} must be called with at most ${fnType.data.genericParamTypes.length} generic parameters, but got called with ${templateParams.length}.`, pos)
+      if (genericParams.length > fnType.data.genericParamTypes.length) {
+        throw new tools.SemanticError(`The function of type ${fnType.repr()} must be called with at most ${fnType.data.genericParamTypes.length} generic parameters, but got called with ${genericParams.length}.`, pos)
       }
-      let createdTemplateParams = new Map()
-      for (let i = 0; i < templateParams.length; ++i) {
-        const { getType, loc } = templateParams[i]
+      let createdGenericParams = new Map()
+      for (let i = 0; i < genericParams.length; ++i) {
+        const { getType, loc } = genericParams[i]
         const type = getType(state, loc)
         tools.assertType(type, fnType.data.genericParamTypes[i].uninstantiate(), loc)
-        createdTemplateParams.set(fnType.data.genericParamTypes[i].typeInstance, type)
+        createdGenericParams.set(fnType.data.genericParamTypes[i].typeInstance, type)
       }
 
       const paramsTypeChecked = params.map(p => p.typeCheck(state))
@@ -375,16 +375,16 @@ const nodes = module.exports = {
       }
       for (let i = 0; i < fnType.data.paramTypes.length; ++i) {
         tools.assertType(paramTypes[i], fnType.data.paramTypes[i], params[i].pos)
-        fnType.data.paramTypes[i].matchUpTemplates({
+        fnType.data.paramTypes[i].matchUpGenerics({
           usingType: paramTypes[i],
-          onTemplate({ self, other }) {
+          onGeneric({ self, other }) {
             console.assert(!!self.typeInstance)
-            const templateValue = createdTemplateParams.get(self.typeInstance)
-            if (!templateValue) {
+            const genericValue = createdGenericParams.get(self.typeInstance)
+            if (!genericValue) {
               tools.assertType(other.uninstantiate(), self, DUMMY_POS)
-              createdTemplateParams.set(self.typeInstance, other)
+              createdGenericParams.set(self.typeInstance, other)
             } else {
-              tools.assertType(other, templateValue, DUMMY_POS)
+              tools.assertType(other, genericValue, DUMMY_POS)
             }
           },
         })
@@ -398,10 +398,10 @@ const nodes = module.exports = {
         throw new tools.SemanticError(`Attempted to do this function call with the wrong purity annotation. You must ${getPurityAnnotationMsg(fnType.data.purity)}`, pos)
       }
 
-      let returnType = fnType.data.bodyType.fillTemplateParams({
+      let returnType = fnType.data.bodyType.fillGenericParams({
         getReplacement(type) {
           console.assert(!!type.typeInstance)
-          const concreteType = createdTemplateParams.get(type.typeInstance)
+          const concreteType = createdGenericParams.get(type.typeInstance)
           if (!concreteType) throw new tools.SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it.`, pos)
           return concreteType
         }
@@ -502,6 +502,14 @@ const nodes = module.exports = {
       return definedWithin.typeCheck(state.addToTypeScope(name, () => getType(state, typePos), pos))
     },
   }),
+  // tag: (pos, { genericDefList, getType, typePos }) => tools.node({
+  //   pos,
+  //   exec: rt => ,
+  //   typeCheck: state => {
+  //     // const type = getType(pos, typePos)
+  //     throw new Error('Not Implemented')
+  //   },
+  // }),
   declaration: (pos, { declarations, expr }) => tools.node({
     pos,
     exec: rt => {

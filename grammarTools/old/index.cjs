@@ -1,5 +1,5 @@
-const nodes = require('./nodes')
-const tools = require('./tools')
+const nodes = require('./nodes.cjs')
+const tools = require('./tools.cjs')
 
 module.exports = {
   nodes,
