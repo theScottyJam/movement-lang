@@ -1,4 +1,4 @@
-import * as Type from './Type'
+import * as Type from './Type.js'
 import { PURITY, getPurityLevel } from './constants.js'
 
 export const anyParams = Symbol('Any Params') // Temporary. Won't be needed once spread syntax is in place, because you could just use the type `(...unknown[]) => unknown`
@@ -41,6 +41,7 @@ const unknownCategory = Type.createCategory('unknown', {
   comparisonOverride: Type.COMPARISON_OVERRIDES.universalAsignee,
 })
 export const createUnknown = () => unknownCategory.create()
+export const isUnknown = (type: Type.AnyType): type is UnknownType => unknownCategory.typeInCategory(type)
 
 // createTag: ({ genericDefList, type: innerType, tagSymbol = Symbol('tag') }) => {
 //   return createType(types._tagSentinel, {

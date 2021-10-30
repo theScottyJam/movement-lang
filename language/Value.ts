@@ -1,4 +1,4 @@
-import type { AnyType } from './Type'
+import type { AnyType } from './Type.js'
 
 export interface Value<T extends AnyType, R> {
   readonly raw: R

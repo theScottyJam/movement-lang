@@ -13,13 +13,20 @@
 @preprocessor typescript
 
 @{%
-  import grammarTools from './grammarTools/index.js'
+  import * as nodes from './nodes/index.js'
   import moo from 'moo'
+  import * as Type from './language/Type.js'
+  import * as types from './language/types.js'
+  import * as TypeState from './language/TypeState.js'
+  import { PURITY } from './language/constants.js'
+  import { from as asPos, range } from './language/Position.js'
+  import { SemanticError } from './language/exceptions.js'
 
-  const { nodes } = grammarTools
-  const { tools } = nodes
-  const { asPos, range } = tools
-  const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
+  const mapMapValues = (map, mapFn) => (
+    new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
+  )
+
+  const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' } as moo.Token) // TODO - get rid of all occurances of this
 %}
 
 @{%
@@ -163,12 +170,12 @@ block
 statement
   -> "return" _ expr10 {%
     ([return_,, expr]) => nextNode => ( // Ignoring nextNode, as nothing can execute after return
-      nodes.return(range(return_, expr.pos), { value: expr })
+      nodes.return_(range(return_, expr.pos), { value: expr })
     )
   %} | ("get" | "run") _ expr80 {%
     ([[callModifier],, invokeExpr]) => nextNode => nodes.sequence([
       nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-        purity: callModifier.value === 'GET' ? tools.PURITY.gets : tools.PURITY.none,
+        purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
         invokeExpr,
       }),
       nextNode
@@ -203,8 +210,8 @@ moduleLevelStatement
     ([function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
       const [genericParamDefList] = genericDefListEntry ?? [[]]
       const [getBodyType] = getBodyTypeEntry ?? [null]
-      const fn = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, genericParamDefList })
-      const assignmentTarget = nodes.assignment.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
+      const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
+      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
         expr: nextNode
@@ -230,18 +237,18 @@ expr10
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
   %} | (%gets _):? (genericParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
     ([getsEntry, genericParamDefListEntry, argDefList,, getBodyTypeEntry, ,, body]) => {
-      const purity = getsEntry == null ? tools.PURITY.pure : tools.PURITY.gets
+      const purity = getsEntry == null ? PURITY.pure : PURITY.gets
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
       const [getBodyType] = getBodyTypeEntry ?? [null]
-      return nodes.function(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
+      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
     }
   %} | expr20 {% id %}
 
 expr20
   -> expr20 _ "==" _ expr30 {%
-    ([l,, ,, r]) => nodes['=='](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.equals(range(l.pos, r.pos), { l, r })
   %} | expr20 _ "!=" _ expr30 {%
-    ([l,, ,, r]) => nodes['!='](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.notEqual(range(l.pos, r.pos), { l, r })
   %} | expr30 {% id %}
 
 expr30
@@ -251,25 +258,25 @@ expr30
 
 expr40
   -> expr40 _ "+" _ expr50 {%
-    ([l,, ,, r]) => nodes['+'](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.add(range(l.pos, r.pos), { l, r })
   %} | expr40 _ "-" _ expr50 {%
-    ([l,, ,, r]) => nodes['-'](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.subtract(range(l.pos, r.pos), { l, r })
   %} | expr50 {% id %}
 
 expr50
   -> expr50 _ "*" _ expr60 {%
-    ([l,, ,, r]) => nodes['*'](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.multiply(range(l.pos, r.pos), { l, r })
   %} | expr60 {% id %}
 
 expr60
   -> expr70 _ "**" _ expr60 {%
-    ([l,, ,, r]) => nodes['**'](range(l.pos, r.pos), { l, r })
+    ([l,, ,, r]) => nodes.power(range(l.pos, r.pos), { l, r })
   %} | expr70 {% id %}
 
 expr70
   -> (%get | %run) _ expr80 {%
     ([[callModifier],, invokeExpr]) => nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-      purity: callModifier.value === 'GET' ? tools.PURITY.gets : tools.PURITY.none,
+      purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
       invokeExpr,
     })
   %} | expr80 {% id %}
@@ -289,48 +296,49 @@ expr80
 
 expr90
   -> expr90 _ "." _ identifier {%
-    ([expr,, ,,identifierToken]) => nodes['.'](range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
+    ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
   %} | expr100 {% id %}
 
 expr100
   -> %number {%
-    ([token]) => nodes.number(asPos(token), { value: BigInt(token.value) })
+    ([token]) => nodes.value.int(asPos(token), { value: BigInt(token.value) })
   %} | %boolean {%
-    ([token]) => nodes.boolean(asPos(token), { value: token.value === 'true' })
+    ([token]) => nodes.value.boolean(asPos(token), { value: token.value === 'true' })
   %} | identifier {%
     ([token]) => nodes.identifier(asPos(token), { identifier: token.value })
   %} | %stringStart %stringContent:? %stringEnd {%
-    ([start, contentEntry, end]) => nodes.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
+    ([start, contentEntry, end]) => nodes.value.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
   %} | "{" _ deliminated[identifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     ([,, entries, ]) => {
       const content = new Map()
       for (const [identifier, typeEntry,, ,, target] of entries) {
         const [requiredTypeGetter] = typeEntry ?? []
         if (content.has(identifier.value)) {
-          throw new tools.SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
+          throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
         }
         content.set(identifier.value, { requiredTypeGetter, target })
       }
-      return nodes.record(DUMMY_POS, { content })
+      return nodes.value.record(DUMMY_POS, { content })
     }
   %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 _):+ "}" {%
     ([,, matchValue,, ,, rawMatchArms, ]) => {
       const matchArms = rawMatchArms.map(([,, pattern,, ,, body]) => ({ pattern, body }))
       return nodes.match(DUMMY_POS, { matchValue, matchArms })
     }
-  %} | %impossible "tag" _ (genericParamDefList _):? type {%
-    // UNFINISHED (also probably should rename genericParamDefList to genericDefList)
-    ([,,genericDefEntry, getType]) => {
-      const [genericParamDefList] = genericDefEntry ?? [null]
-      nodes.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
-    }
   %}
+#   %} | "tag" _ (genericParamDefList _):? type {%
+#     // UNFINISHED (also probably should rename genericParamDefList to genericDefList)
+#     ([,,genericDefEntry, getType]) => {
+#       const [genericParamDefList] = genericDefEntry ?? [null]
+#       nodes.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
+#     }
+#   %}
 
 assignmentTarget -> pattern10 {% id %}
 
 pattern10
   -> pattern10 _ "where" _ expr10 {%
-    ([pattern,, ,, constraint]) => nodes.assignment.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
+    ([pattern,, ,, constraint]) => nodes.assignmentTarget.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
   %} | pattern20 {% id %}
 
 pattern20
@@ -342,11 +350,11 @@ pattern30
   -> identifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
-      return nodes.assignment.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
+      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
     }
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     ([leftBracket,, destructureEntries, rightBracket]) => (
-      nodes.assignment.destructureObj(range(leftBracket, rightBracket), {
+      nodes.assignmentTarget.destructureObj(range(leftBracket, rightBracket), {
         entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
       })
     )
@@ -360,7 +368,7 @@ pattern30
       constraints.push(constraint)
       state = state.addToTypeScope(identifier, () => constraint, identPos)
     }
-    return tools.types.createFunction({
+    return types.createFunction({
       paramTypes: paramTypeGetters.map(getType => getType(state, pos)),
       genericParamTypes: constraints,
       bodyType: getBodyType(state, pos),
@@ -372,40 +380,40 @@ pattern30
 type
   -> %userType {%
     ([token]) => (state, pos) => {
-      const typeInfo = state.lookupType(token.value)
-      if (!typeInfo) throw new tools.SemanticError(`Type "${token.value}" not found.`, asPos(token))
-      return typeInfo.createType().withName(token.value)
+      const typeInfo = TypeState.lookupType(state, token.value)
+      if (!typeInfo) throw new SemanticError(`Type "${token.value}" not found.`, asPos(token))
+      return Type.withName(typeInfo.createType(), token.value)
     }
   %} | %simpleType {%
     ([token]) => {
-      if (token.value === '#unit') return () => tools.types.unit
-      else if (token.value === '#int') return () => tools.types.int
-      else if (token.value === '#string') return () => tools.types.string
-      else if (token.value === '#boolean') return () => tools.types.boolean
-      else if (token.value === '#never') return () => tools.types.never
-      else if (token.value === '#unknown') return () => tools.types.unknown
-      else throw new tools.SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
+      if (token.value === '#unit') return () => types.createUnit()
+      else if (token.value === '#int') return () => types.createInt()
+      else if (token.value === '#string') return () => types.createString()
+      else if (token.value === '#boolean') return () => types.createBoolean()
+      else if (token.value === '#never') return () => types.createNever()
+      else if (token.value === '#unknown') return () => types.createUnknown()
+      else throw new SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
     }
   %} | "#" "{" _ deliminated[identifier _ type _, "," _, ("," _):?] "}" {%
     ([, ,, entries, ]) => {
       const content = new Map()
       for (const [identifierToken,, getType] of entries) {
         if (content.has(identifierToken.value)) {
-          throw new tools.SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
+          throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
         }
         content.set(identifierToken.value, getType)
       }
-      return (state, pos) => tools.types.createRecord(tools.mapMapValues(content, getType => getType(state, pos)))
+      return (state, pos) => types.createRecord({ nameToType: mapMapValues(content, getType => getType(state, pos)) })
     }
   %} | ("#gets" _ | "#") (genericParamDefList _):? typeList _ "=>" _ type {%
     ([[callModifierToken], genericParamDefListEntry, paramTypeGetters,, ,, getBodyType]) => {
-      const purity = callModifierToken.value === '#gets' ? tools.PURITY.gets : tools.PURITY.pure
+      const purity = callModifierToken.value === '#gets' ? PURITY.gets : PURITY.pure
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
       return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
     }
   %} | "#function" _ (genericParamDefList _):? typeList _ type {%
     ([,, genericParamDefListEntry, paramTypeGetters,, getBodyType]) => {
-      const purity = tools.PURITY.none
+      const purity = PURITY.none
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
       return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
     }
@@ -425,7 +433,7 @@ genericParamDefList
   -> "<" _ nonEmptyDeliminated[%userType _ (%of _ type _):?, "," _, ("," _):?] ">" {%
     ([,, entries]) => (
       entries.map(([identifier,, typeEntry]) => {
-        const [,, getConstraint] = typeEntry ?? [,, () => tools.types.unknown]
+        const [,, getConstraint] = typeEntry ?? [,, () => types.createUnknown()]
         return { identifier: identifier.value, getConstraint, identPos: asPos(identifier), constraintPos: DUMMY_POS }
       })
     )

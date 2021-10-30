@@ -31,7 +31,7 @@ export function from(token: Token): Position {
   }
 }
 
-export function range(token1: Token | Position, token2: Token | Position) {
+export function range(token1: Token | Position, token2: Token | Position): Position {
   const pos1 = isPos(token1) ? token1 : from(token1)
   const pos2 = isPos(token2) ? token2 : from(token2)
   return {

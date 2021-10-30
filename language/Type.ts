@@ -1,5 +1,5 @@
 import { SemanticError } from './exceptions.js'
-import type { Position } from './Position'
+import type { Position } from './Position.js'
 
 const categoryBehaviors = Symbol('Category behaviors')
 
@@ -167,7 +167,7 @@ export function isTypeAssignableTo(type: AnyType, expectedType: AnyType): boolea
   return type.category[categoryBehaviors].compare(type, expectedType)
 }
 
-export function assertType(type: AnyType, expectedType: AnyType, pos: Position, message: string = null): void {
+export function assertTypeAssignableTo(type: AnyType, expectedType: AnyType, pos: Position, message: string = null): void {
   if (!isTypeAssignableTo(type, expectedType)) {
     throw new SemanticError(message ?? `Found type "${repr(type)}", but expected type "${repr(expectedType)}".`, pos)
   }

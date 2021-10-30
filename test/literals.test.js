@@ -1,5 +1,5 @@
 const { testRun } = require('../parser')
-const { BaseParseTimeError } = require('../grammarTools')
+const { BaseParseTimeError } = require('../language/exceptions')
 
 const customTestRun = text => {
   try {

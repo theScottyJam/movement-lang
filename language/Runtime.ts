@@ -1,4 +1,4 @@
-import type { AnyValue } from './Value'
+import type { AnyValue } from './Value.js'
 
 export interface RuntimeScope {
   readonly identifier: string

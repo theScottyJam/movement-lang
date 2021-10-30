@@ -1,5 +1,5 @@
-import type { Position } from './Position'
-import type * as Type from './Type'
+import type { Position } from './Position.js'
+import type * as Type from './Type.js'
 
 export interface RespState {
   // Variables encountered that belong to the outer scope get captured here.

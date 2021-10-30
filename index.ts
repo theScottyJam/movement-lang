@@ -6,6 +6,7 @@ globalThis.debug = (...args) => {
 }
 
 run(`\
-let x = 2
-print x
+begin {
+  print 'Hello world!'
+}
 `)

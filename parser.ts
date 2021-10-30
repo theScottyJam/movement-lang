@@ -1,6 +1,5 @@
 import nearley from 'nearley'
-import grammarTools from './grammarTools/index.js'
-const { nodes } = grammarTools
+import { BadSyntaxError, SemanticError } from './language/exceptions.js'
 import builtGrammar from './grammar.built.js'
 
 const parser = new nearley.Parser(nearley.Grammar.fromCompiled(builtGrammar));
@@ -14,7 +13,7 @@ const termColors = {
 
 function parse(text) {
   parser.feed(text)
-  if (parser.results.length === 0) throw new nodes.tools.SyntaxError('Unexpected end-of-file.', null)
+  if (parser.results.length === 0) throw new BadSyntaxError('Unexpected end-of-file.', null)
   if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
   return parser.results[0]
 }
@@ -68,7 +67,7 @@ export function run(text) {
   try {
     ast = parse(text)
   } catch (err) {
-    if (err instanceof grammarTools.SemanticError) {
+    if (err instanceof SemanticError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Semantic Error: ' + reset + err.message)
       if (err.pos) {
@@ -77,7 +76,7 @@ export function run(text) {
         throw new Error('Internal error: Forgot to set the "pos" attribute on this error')
       }
       return
-    } else if (err instanceof grammarTools.SyntaxError) {
+    } else if (err instanceof BadSyntaxError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Syntax Error: ' + reset + err.message)
       printPosition(text, err.pos)
@@ -92,7 +91,7 @@ export function run(text) {
   try {
     ast.typeCheck()
   } catch (err) {
-    if (err instanceof grammarTools.SemanticError) {
+    if (err instanceof SemanticError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Semantic Error: ' + reset + err.message)
       printPosition(text, err.pos)
@@ -107,12 +106,13 @@ export function run(text) {
 
 export function testRun(text) {
   let result = []
-  const debugOutput = value => result.push(value)
 
-  grammarTools.withDebugOutput(debugOutput, () => {
-    const ast = parse(text)
-    ast.typeCheck()
-    ast.exec()
+  const ast = parse(text)
+  ast.typeCheck()
+  ast.exec({
+    behaviors: {
+      showDebugOutput: value => result.push(value)
+    }
   })
 
   return result

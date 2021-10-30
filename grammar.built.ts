@@ -13,22 +13,29 @@ declare var boolean: any;
 declare var stringStart: any;
 declare var stringContent: any;
 declare var stringEnd: any;
-declare var impossible: any;
 declare var simpleType: any;
 declare var of: any;
 declare var upperIdentifier: any;
 declare var nonUpperIdentifier: any;
+declare var impossible: any;
 declare var whitespace: any;
 declare var comment: any;
 declare var newLine: any;
 
-  import grammarTools from './grammarTools/index.js'
+  import * as nodes from './nodes/index.js'
   import moo from 'moo'
+  import * as Type from './language/Type.js'
+  import * as types from './language/types.js'
+  import * as TypeState from './language/TypeState.js'
+  import { PURITY } from './language/constants.js'
+  import { from as asPos, range } from './language/Position.js'
+  import { SemanticError } from './language/exceptions.js'
 
-  const { nodes } = grammarTools
-  const { tools } = nodes
-  const { asPos, range } = tools
-  const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' }) // TODO - get rid of all occurances of this
+  const mapMapValues = (map, mapFn) => (
+    new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
+  )
+
+  const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' } as moo.Token) // TODO - get rid of all occurances of this
 
 
   const lexer = moo.states({
@@ -127,7 +134,7 @@ declare var newLine: any;
       constraints.push(constraint)
       state = state.addToTypeScope(identifier, () => constraint, identPos)
     }
-    return tools.types.createFunction({
+    return types.createFunction({
       paramTypes: paramTypeGetters.map(getType => getType(state, pos)),
       genericParamTypes: constraints,
       bodyType: getBodyType(state, pos),
@@ -211,7 +218,7 @@ const grammar: Grammar = {
           },
     {"name": "statement", "symbols": [{"literal":"return"}, "_", "expr10"], "postprocess": 
         ([return_,, expr]) => nextNode => ( // Ignoring nextNode, as nothing can execute after return
-          nodes.return(range(return_, expr.pos), { value: expr })
+          nodes.return_(range(return_, expr.pos), { value: expr })
         )
           },
     {"name": "statement$subexpression$1", "symbols": [{"literal":"get"}]},
@@ -219,7 +226,7 @@ const grammar: Grammar = {
     {"name": "statement", "symbols": ["statement$subexpression$1", "_", "expr80"], "postprocess": 
         ([[callModifier],, invokeExpr]) => nextNode => nodes.sequence([
           nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-            purity: callModifier.value === 'GET' ? tools.PURITY.gets : tools.PURITY.none,
+            purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
             invokeExpr,
           }),
           nextNode
@@ -268,8 +275,8 @@ const grammar: Grammar = {
         ([function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
           const [genericParamDefList] = genericDefListEntry ?? [[]]
           const [getBodyType] = getBodyTypeEntry ?? [null]
-          const fn = nodes.function(DUMMY_POS, { params, body, getBodyType, purity: tools.PURITY.none, genericParamDefList })
-          const assignmentTarget = nodes.assignment.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
+          const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
+          const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
           return nextNode => nodes.declaration(DUMMY_POS, {
             declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
             expr: nextNode
@@ -310,18 +317,18 @@ const grammar: Grammar = {
     {"name": "expr10$ebnf$4", "symbols": [], "postprocess": () => null},
     {"name": "expr10", "symbols": ["expr10$ebnf$2", "expr10$ebnf$3", "argDefList", "_", "expr10$ebnf$4", {"literal":"=>"}, "_", "expr10"], "postprocess": 
         ([getsEntry, genericParamDefListEntry, argDefList,, getBodyTypeEntry, ,, body]) => {
-          const purity = getsEntry == null ? tools.PURITY.pure : tools.PURITY.gets
+          const purity = getsEntry == null ? PURITY.pure : PURITY.gets
           const [genericParamDefList] = genericParamDefListEntry ?? [[]]
           const [getBodyType] = getBodyTypeEntry ?? [null]
-          return nodes.function(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
+          return nodes.value.function_(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
         }
           },
     {"name": "expr10", "symbols": ["expr20"], "postprocess": id},
     {"name": "expr20", "symbols": ["expr20", "_", {"literal":"=="}, "_", "expr30"], "postprocess": 
-        ([l,, ,, r]) => nodes['=='](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.equals(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr20", "symbols": ["expr20", "_", {"literal":"!="}, "_", "expr30"], "postprocess": 
-        ([l,, ,, r]) => nodes['!='](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.notEqual(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr20", "symbols": ["expr30"], "postprocess": id},
     {"name": "expr30", "symbols": ["expr30", "_", {"literal":"as"}, "_", "type"], "postprocess": 
@@ -329,25 +336,25 @@ const grammar: Grammar = {
           },
     {"name": "expr30", "symbols": ["expr40"], "postprocess": id},
     {"name": "expr40", "symbols": ["expr40", "_", {"literal":"+"}, "_", "expr50"], "postprocess": 
-        ([l,, ,, r]) => nodes['+'](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.add(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr40", "symbols": ["expr40", "_", {"literal":"-"}, "_", "expr50"], "postprocess": 
-        ([l,, ,, r]) => nodes['-'](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.subtract(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr40", "symbols": ["expr50"], "postprocess": id},
     {"name": "expr50", "symbols": ["expr50", "_", {"literal":"*"}, "_", "expr60"], "postprocess": 
-        ([l,, ,, r]) => nodes['*'](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.multiply(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr50", "symbols": ["expr60"], "postprocess": id},
     {"name": "expr60", "symbols": ["expr70", "_", {"literal":"**"}, "_", "expr60"], "postprocess": 
-        ([l,, ,, r]) => nodes['**'](range(l.pos, r.pos), { l, r })
+        ([l,, ,, r]) => nodes.power(range(l.pos, r.pos), { l, r })
           },
     {"name": "expr60", "symbols": ["expr70"], "postprocess": id},
     {"name": "expr70$subexpression$1", "symbols": [(lexer.has("get") ? {type: "get"} : get)]},
     {"name": "expr70$subexpression$1", "symbols": [(lexer.has("run") ? {type: "run"} : run)]},
     {"name": "expr70", "symbols": ["expr70$subexpression$1", "_", "expr80"], "postprocess": 
         ([[callModifier],, invokeExpr]) => nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-          purity: callModifier.value === 'GET' ? tools.PURITY.gets : tools.PURITY.none,
+          purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
           invokeExpr,
         })
           },
@@ -402,14 +409,14 @@ const grammar: Grammar = {
         ([,, entries]) => entries.map(([getType]) => ({ getType, loc: DUMMY_POS }))
             },
     {"name": "expr90", "symbols": ["expr90", "_", {"literal":"."}, "_", "identifier"], "postprocess": 
-        ([expr,, ,,identifierToken]) => nodes['.'](range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
+        ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
           },
     {"name": "expr90", "symbols": ["expr100"], "postprocess": id},
     {"name": "expr100", "symbols": [(lexer.has("number") ? {type: "number"} : number)], "postprocess": 
-        ([token]) => nodes.number(asPos(token), { value: BigInt(token.value) })
+        ([token]) => nodes.value.int(asPos(token), { value: BigInt(token.value) })
           },
     {"name": "expr100", "symbols": [(lexer.has("boolean") ? {type: "boolean"} : boolean)], "postprocess": 
-        ([token]) => nodes.boolean(asPos(token), { value: token.value === 'true' })
+        ([token]) => nodes.value.boolean(asPos(token), { value: token.value === 'true' })
           },
     {"name": "expr100", "symbols": ["identifier"], "postprocess": 
         ([token]) => nodes.identifier(asPos(token), { identifier: token.value })
@@ -417,7 +424,7 @@ const grammar: Grammar = {
     {"name": "expr100$ebnf$1", "symbols": [(lexer.has("stringContent") ? {type: "stringContent"} : stringContent)], "postprocess": id},
     {"name": "expr100$ebnf$1", "symbols": [], "postprocess": () => null},
     {"name": "expr100", "symbols": [(lexer.has("stringStart") ? {type: "stringStart"} : stringStart), "expr100$ebnf$1", (lexer.has("stringEnd") ? {type: "stringEnd"} : stringEnd)], "postprocess": 
-        ([start, contentEntry, end]) => nodes.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
+        ([start, contentEntry, end]) => nodes.value.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
           },
     {"name": "expr100$macrocall$2$ebnf$1$subexpression$1", "symbols": ["type", "_"]},
     {"name": "expr100$macrocall$2$ebnf$1", "symbols": ["expr100$macrocall$2$ebnf$1$subexpression$1"], "postprocess": id},
@@ -448,11 +455,11 @@ const grammar: Grammar = {
           for (const [identifier, typeEntry,, ,, target] of entries) {
             const [requiredTypeGetter] = typeEntry ?? []
             if (content.has(identifier.value)) {
-              throw new tools.SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
+              throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
             }
             content.set(identifier.value, { requiredTypeGetter, target })
           }
-          return nodes.record(DUMMY_POS, { content })
+          return nodes.value.record(DUMMY_POS, { content })
         }
           },
     {"name": "expr100$ebnf$2$subexpression$1", "symbols": [{"literal":"when"}, "_", "pattern10", "_", {"literal":"then"}, "_", "expr10", "_"]},
@@ -465,19 +472,9 @@ const grammar: Grammar = {
           return nodes.match(DUMMY_POS, { matchValue, matchArms })
         }
           },
-    {"name": "expr100$ebnf$3$subexpression$1", "symbols": ["genericParamDefList", "_"]},
-    {"name": "expr100$ebnf$3", "symbols": ["expr100$ebnf$3$subexpression$1"], "postprocess": id},
-    {"name": "expr100$ebnf$3", "symbols": [], "postprocess": () => null},
-    {"name": "expr100", "symbols": [(lexer.has("impossible") ? {type: "impossible"} : impossible), {"literal":"tag"}, "_", "expr100$ebnf$3", "type"], "postprocess": 
-        // UNFINISHED (also probably should rename genericParamDefList to genericDefList)
-        ([,,genericDefEntry, getType]) => {
-          const [genericParamDefList] = genericDefEntry ?? [null]
-          nodes.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
-        }
-          },
     {"name": "assignmentTarget", "symbols": ["pattern10"], "postprocess": id},
     {"name": "pattern10", "symbols": ["pattern10", "_", {"literal":"where"}, "_", "expr10"], "postprocess": 
-        ([pattern,, ,, constraint]) => nodes.assignment.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
+        ([pattern,, ,, constraint]) => nodes.assignmentTarget.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
           },
     {"name": "pattern10", "symbols": ["pattern20"], "postprocess": id},
     {"name": "pattern20", "symbols": ["pattern30", "_", {"literal":">"}, "_", "expr10"], "postprocess": 
@@ -490,7 +487,7 @@ const grammar: Grammar = {
     {"name": "pattern30", "symbols": ["identifier", "pattern30$ebnf$1"], "postprocess": 
         ([identifier, maybeGetTypeEntry]) => {
           const [, getType] = maybeGetTypeEntry ?? []
-          return nodes.assignment.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
+          return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
         }
           },
     {"name": "pattern30$macrocall$2", "symbols": ["identifier", "_", {"literal":":"}, "_", "pattern10", "_"]},
@@ -515,27 +512,27 @@ const grammar: Grammar = {
           },
     {"name": "pattern30", "symbols": [{"literal":"{"}, "_", "pattern30$macrocall$1", {"literal":"}"}], "postprocess": 
         ([leftBracket,, destructureEntries, rightBracket]) => (
-          nodes.assignment.destructureObj(range(leftBracket, rightBracket), {
+          nodes.assignmentTarget.destructureObj(range(leftBracket, rightBracket), {
             entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
           })
         )
           },
     {"name": "type", "symbols": [(lexer.has("userType") ? {type: "userType"} : userType)], "postprocess": 
         ([token]) => (state, pos) => {
-          const typeInfo = state.lookupType(token.value)
-          if (!typeInfo) throw new tools.SemanticError(`Type "${token.value}" not found.`, asPos(token))
-          return typeInfo.createType().withName(token.value)
+          const typeInfo = TypeState.lookupType(state, token.value)
+          if (!typeInfo) throw new SemanticError(`Type "${token.value}" not found.`, asPos(token))
+          return Type.withName(typeInfo.createType(), token.value)
         }
           },
     {"name": "type", "symbols": [(lexer.has("simpleType") ? {type: "simpleType"} : simpleType)], "postprocess": 
         ([token]) => {
-          if (token.value === '#unit') return () => tools.types.unit
-          else if (token.value === '#int') return () => tools.types.int
-          else if (token.value === '#string') return () => tools.types.string
-          else if (token.value === '#boolean') return () => tools.types.boolean
-          else if (token.value === '#never') return () => tools.types.never
-          else if (token.value === '#unknown') return () => tools.types.unknown
-          else throw new tools.SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
+          if (token.value === '#unit') return () => types.createUnit()
+          else if (token.value === '#int') return () => types.createInt()
+          else if (token.value === '#string') return () => types.createString()
+          else if (token.value === '#boolean') return () => types.createBoolean()
+          else if (token.value === '#never') return () => types.createNever()
+          else if (token.value === '#unknown') return () => types.createUnknown()
+          else throw new SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
         }
           },
     {"name": "type$macrocall$2", "symbols": ["identifier", "_", "type", "_"]},
@@ -563,11 +560,11 @@ const grammar: Grammar = {
           const content = new Map()
           for (const [identifierToken,, getType] of entries) {
             if (content.has(identifierToken.value)) {
-              throw new tools.SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
+              throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
             }
             content.set(identifierToken.value, getType)
           }
-          return (state, pos) => tools.types.createRecord(tools.mapMapValues(content, getType => getType(state, pos)))
+          return (state, pos) => types.createRecord({ nameToType: mapMapValues(content, getType => getType(state, pos)) })
         }
           },
     {"name": "type$subexpression$1", "symbols": [{"literal":"#gets"}, "_"]},
@@ -577,7 +574,7 @@ const grammar: Grammar = {
     {"name": "type$ebnf$1", "symbols": [], "postprocess": () => null},
     {"name": "type", "symbols": ["type$subexpression$1", "type$ebnf$1", "typeList", "_", {"literal":"=>"}, "_", "type"], "postprocess": 
         ([[callModifierToken], genericParamDefListEntry, paramTypeGetters,, ,, getBodyType]) => {
-          const purity = callModifierToken.value === '#gets' ? tools.PURITY.gets : tools.PURITY.pure
+          const purity = callModifierToken.value === '#gets' ? PURITY.gets : PURITY.pure
           const [genericParamDefList] = genericParamDefListEntry ?? [[]]
           return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
         }
@@ -587,7 +584,7 @@ const grammar: Grammar = {
     {"name": "type$ebnf$2", "symbols": [], "postprocess": () => null},
     {"name": "type", "symbols": [{"literal":"#function"}, "_", "type$ebnf$2", "typeList", "_", "type"], "postprocess": 
         ([,, genericParamDefListEntry, paramTypeGetters,, getBodyType]) => {
-          const purity = tools.PURITY.none
+          const purity = PURITY.none
           const [genericParamDefList] = genericParamDefListEntry ?? [[]]
           return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
         }
@@ -660,7 +657,7 @@ const grammar: Grammar = {
     {"name": "genericParamDefList", "symbols": [{"literal":"<"}, "_", "genericParamDefList$macrocall$1", {"literal":">"}], "postprocess": 
         ([,, entries]) => (
           entries.map(([identifier,, typeEntry]) => {
-            const [,, getConstraint] = typeEntry ?? [,, () => tools.types.unknown]
+            const [,, getConstraint] = typeEntry ?? [,, () => types.createUnknown()]
             return { identifier: identifier.value, getConstraint, identPos: asPos(identifier), constraintPos: DUMMY_POS }
           })
         )
