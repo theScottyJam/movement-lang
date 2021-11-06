@@ -3,45 +3,49 @@ import { PURITY, getPurityLevel } from './constants.js'
 
 export const anyParams = Symbol('Any Params') // Temporary. Won't be needed once spread syntax is in place, because you could just use the type `(...unknown[]) => unknown`
 
-export type UnitType = Type.Type<{ name: 'unit', data: undefined }>
+export type UnitType = Type.ConcreteType<{ name: 'unit', data: undefined }>
 const unitCategory = Type.createCategory('unit', {
   repr: (self: UnitType) => '#unit',
 })
 export const createUnit = (): UnitType => unitCategory.create()
 
-export type IntType = Type.Type<{ name: 'int', data: undefined }>
+export type IntType = Type.ConcreteType<{ name: 'int', data: undefined }>
 const intCategory = Type.createCategory('int', {
   repr: (self: IntType) => '#int',
 })
 export const createInt = () => intCategory.create()
 
-export type StringType = Type.Type<{ name: 'string', data: undefined }>
+export type StringType = Type.ConcreteType<{ name: 'string', data: undefined }>
 const stringCategory = Type.createCategory('string', {
   repr: (self: StringType) => '#string',
 })
 export const createString = () => stringCategory.create()
 
-export type BooleanType = Type.Type<{ name: 'boolean', data: undefined }>
+export type BooleanType = Type.ConcreteType<{ name: 'boolean', data: undefined }>
 const booleanCategory = Type.createCategory('boolean', {
   repr: (self: BooleanType) => '#boolean',
 })
 export const createBoolean = () => booleanCategory.create()
 
-export type NeverType = Type.Type<{ name: 'never', data: undefined }>
+export type NeverType = Type.ConcreteType<{ name: 'never', data: undefined }>
 const neverCategory = Type.createCategory('never', {
   repr: (self: NeverType) => '#never',
   comparisonOverride: Type.COMPARISON_OVERRIDES.universalAssigner,
 })
 export const createNever = () => neverCategory.create()
-export const isNever = (type: Type.AnyType): type is NeverType => neverCategory.typeInCategory(type)
+export const isNever = (type: Type.AnyConcreteType): type is NeverType => neverCategory.typeInCategory(type)
+export const isEffectivelyNever = (type: Type.AnyType): type is NeverType =>
+  Type.isTypeParameter(type)
+    ? neverCategory.typeInCategory(type.constrainedBy)
+    : neverCategory.typeInCategory(type)
 
-export type UnknownType = Type.Type<{ name: 'unknown', data: undefined }>
+export type UnknownType = Type.ConcreteType<{ name: 'unknown', data: undefined }>
 const unknownCategory = Type.createCategory('unknown', {
   repr: (self: UnknownType) => '#unknown',
-  comparisonOverride: Type.COMPARISON_OVERRIDES.universalAsignee,
+  comparisonOverride: Type.COMPARISON_OVERRIDES.universalAssignee,
 })
 export const createUnknown = () => unknownCategory.create()
-export const isUnknown = (type: Type.AnyType): type is UnknownType => unknownCategory.typeInCategory(type)
+export const isUnknown = (type: Type.AnyConcreteType): type is UnknownType => unknownCategory.typeInCategory(type)
 
 // createTag: ({ genericDefList, type: innerType, tagSymbol = Symbol('tag') }) => {
 //   return createType(types._tagSentinel, {
@@ -68,7 +72,7 @@ interface RecordTypeData {
   readonly nameToType: Map<string, Type.AnyType>
 }
 
-export type RecordType = Type.Type<{ name: 'record', data: RecordTypeData }>
+export type RecordType = Type.ConcreteType<{ name: 'record', data: RecordTypeData }>
 const recordCategory = Type.createCategory('record', {
   repr: (self: RecordType) => self.data.nameToType.size === 0
     ? '#{}'
@@ -102,12 +106,12 @@ export const createRecord = (nameToType: RecordTypeData): RecordType => recordCa
 
 interface FunctionTypeData {
   readonly paramTypes: readonly Type.AnyType[] | typeof anyParams
-  readonly genericParamTypes: readonly Type.AnyType[]
+  readonly genericParamTypes: readonly Type.AnyParameterType[]
   readonly bodyType: Type.AnyType
   readonly purity: typeof PURITY[keyof typeof PURITY]
 }
 
-export type FunctionType = Type.Type<{ name: 'function', data: FunctionTypeData }>
+export type FunctionType = Type.ConcreteType<{ name: 'function', data: FunctionTypeData }>
 const functionCategory = Type.createCategory('function', {
   repr: (self: FunctionType) => {
     const paramsStr = self.data.paramTypes === anyParams ? '...#unknown[]' : self.data.paramTypes.map(t => Type.repr(t)).join(', ')
@@ -120,21 +124,25 @@ const functionCategory = Type.createCategory('function', {
   },
   compare: (self: FunctionType, other: FunctionType) => {
     const comparePotentiallyGenericParams = (param: Type.AnyType, otherParam: Type.AnyType) => {
-      const genericIndex = self.data.genericParamTypes.findIndex(p => p.typeInstance === param.typeInstance)
-      const otherGenericIndex = other.data.genericParamTypes.findIndex(p => p.typeInstance === otherParam.typeInstance)
+      const genericIndex = Type.isTypeParameter(param)
+        ? self.data.genericParamTypes.findIndex(p => p.parameterSentinel === param.parameterSentinel)
+        : -1
+      const otherGenericIndex = Type.isTypeParameter(otherParam)
+        ? other.data.genericParamTypes.findIndex(p => p.parameterSentinel === otherParam.parameterSentinel)
+        : -1
+
       if (otherGenericIndex !== -1) {
-        if (genericIndex === -1) return false
-        if (genericIndex !== otherGenericIndex) return false
+        return genericIndex === otherGenericIndex
       } else {
-        if (!Type.isTypeAssignableTo(Type.uninstantiate(param), otherParam)) return false
+        const concreteParam = Type.isTypeParameter(param) ? param.constrainedBy : param
+        return Type.isTypeAssignableTo(concreteParam, otherParam)
       }
-      return true
     }
 
     if (self.data.paramTypes !== anyParams && other.data.paramTypes !== anyParams) {
       if (self.data.genericParamTypes.length !== other.data.genericParamTypes.length) return false
       for (let i = 0; i < self.data.genericParamTypes.length; ++i) {
-        if (!Type.isTypeAssignableTo(Type.uninstantiate(self.data.genericParamTypes[i]), Type.uninstantiate(other.data.genericParamTypes[i]))) return false
+        if (!Type.isTypeAssignableTo(self.data.genericParamTypes[i].constrainedBy, other.data.genericParamTypes[i].constrainedBy)) return false
       }
       if (self.data.paramTypes.length !== other.data.paramTypes.length) return false
       

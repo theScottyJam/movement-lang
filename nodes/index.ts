@@ -69,7 +69,7 @@ export const block = (pos: Position, { content }: BlockOpts) => Node.create({
   },
   typeCheck: state => {
     const { respState, type: contentType } = content.typeCheck(state)
-    const type = types.isNever(contentType) ? types.createNever() : types.createUnit()
+    const type = types.isEffectivelyNever(contentType) ? types.createNever() : types.createUnit()
     return { respState, type }
   },
 })
@@ -82,7 +82,7 @@ export const sequence = (statements: readonly Node[]) => Node.create({
   typeCheck: state => {
     const typeChecks = statements.map(statement => statement.typeCheck(state))
     const respStates = typeChecks.map(x => x.respState)
-    const type = typeChecks.find(x => types.isNever(x.type)) ? types.createNever() : types.createUnit()
+    const type = typeChecks.find(x => types.isEffectivelyNever(x.type)) ? types.createNever() : types.createUnit()
     return { respState: RespState.merge(...respStates), type }
   },
 })
@@ -199,7 +199,7 @@ export const propertyAccess = (pos: Position, { l, identifier }: PropertyAccessO
   typeCheck: state => {
     const { respState, type: lType } = l.typeCheck(state)
     Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
-    const result = assertRecordInnerDataType(lType.data).nameToType.get(identifier)
+    const result = assertRecordInnerDataType(Type.assertIsConcreteType(lType).data).nameToType.get(identifier)
     if (!result) throw new SemanticError(`Failed to find the identifier "${identifier}" on the record of type ${Type.repr(lType)}.`, pos)
     return { respState, type: result }
   },
@@ -254,7 +254,7 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
   },
   typeCheck: (state, { callWithPurity = PURITY.pure } = {}) => {
     const { respState: fnRespState, type: fnType } = fnExpr.typeCheck(state)
-    const fnTypeData = assertFunctionInnerDataType(fnType.data)
+    const fnTypeData = assertFunctionInnerDataType(Type.assertIsConcreteType(fnType).data)
 
     if (genericParams.length > fnTypeData.genericParamTypes.length) {
       throw new SemanticError(`The function of type ${Type.repr(fnType)} must be called with at most ${fnTypeData.genericParamTypes.length} generic parameters, but got called with ${genericParams.length}.`, pos)
@@ -263,8 +263,8 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
     for (let i = 0; i < genericParams.length; ++i) {
       const { getType, loc: pos } = genericParams[i]
       const type = getType(state, pos)
-      Type.assertTypeAssignableTo(type, Type.uninstantiate(fnTypeData.genericParamTypes[i]), pos)
-      createdGenericParams.set(fnTypeData.genericParamTypes[i].typeInstance, type)
+      Type.assertTypeAssignableTo(type, fnTypeData.genericParamTypes[i].constrainedBy, pos)
+      createdGenericParams.set(fnTypeData.genericParamTypes[i].parameterSentinel, type)
     }
 
     const paramsTypeChecked = params.map(p => p.typeCheck(state))
@@ -277,15 +277,16 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
       throw new SemanticError(`Found ${paramTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
     for (let i = 0; i < fnTypeData.paramTypes.length; ++i) {
-      Type.assertTypeAssignableTo(paramTypes[i], fnTypeData.paramTypes[i], params[i].pos)
+      const someType = fnTypeData.paramTypes[i]
+      const concrete = Type.isTypeParameter(someType) ? someType.constrainedBy : someType
+      Type.assertTypeAssignableTo(paramTypes[i], concrete, params[i].pos)
       Type.matchUpGenerics(fnTypeData.paramTypes[i], {
         usingType: paramTypes[i],
         onGeneric({ self, other }) {
-          console.assert(!!self.typeInstance)
-          const genericValue = createdGenericParams.get(self.typeInstance)
+          const genericValue = createdGenericParams.get(self.parameterSentinel)
           if (!genericValue) {
-            Type.assertTypeAssignableTo(Type.uninstantiate(other), self, DUMMY_POS)
-            createdGenericParams.set(self.typeInstance, other)
+            Type.assertTypeAssignableTo(other, self, DUMMY_POS)
+            createdGenericParams.set(self.parameterSentinel, other)
           } else {
             Type.assertTypeAssignableTo(other, genericValue, DUMMY_POS)
           }
@@ -303,8 +304,7 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
 
     let returnType = Type.fillGenericParams(fnTypeData.bodyType, {
       getReplacement(type) {
-        console.assert(!!type.typeInstance)
-        const concreteType = createdGenericParams.get(type.typeInstance)
+        const concreteType = createdGenericParams.get(type.parameterSentinel)
         if (!concreteType) throw new SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it.`, pos)
         return concreteType
       }

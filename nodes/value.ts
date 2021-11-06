@@ -20,6 +20,7 @@ type AnyType = Type.AnyType
 
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 type TypeGetter = (TypeState, Position) => AnyType
+type ConcreteTypeGetter = (TypeState, Position) => Type.AnyConcreteType
 
 interface IntOpts { value: bigint }
 export const int = (pos: Position, { value }: IntOpts) => Node.create({
@@ -103,7 +104,7 @@ export const record = (pos: Position, { content }: RecordOpts) => {
 
 interface GenericParamDefinition {
   identifier: string
-  getConstraint: TypeGetter
+  getConstraint: ConcreteTypeGetter
   identPos: Position
   constraintPos: Position
 }
@@ -115,72 +116,74 @@ interface FunctionOpts {
   purity: purityTypes
   genericParamDefList: GenericParamDefinition[]
 }
-export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionOpts) => {
-  let capturesState: readonly string[]
-  let finalType: types.FunctionType | null
-  return Node.create({
-    pos,
-    exec: rt => values.createFunction(
-      {
-        params,
-        body,
-        capturedScope: capturesState.map(identifier => ({ identifier, value: Runtime.lookupVar(rt, identifier) })),
-      },
-      assertNotNullish(finalType),
-    ),
-    typeCheck: outerState => {
-      let state = TypeState.create({
-        scopes: [...outerState.scopes, new Map()],
-        definedTypes: [...outerState.definedTypes, new Map()],
-        minPurity: purity,
-        isBeginBlock: false,
-      })
-
-      const genericParamTypes = []
-      for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
-        const constraint = Type.asNewInstance(getConstraint(state, constraintPos))
-        genericParamTypes.push(constraint)
-        state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
-      }
-
-      const paramTypes = []
-      const respStates = []
-      for (const param of params) {
-        const { respState, type } = param.contextlessTypeCheck(state)
-        paramTypes.push(type)
-        respStates.push(RespState.update(respState, { declarations: [] }))
-        state = TypeState.applyDeclarations(state, respState)
-      }
-      const { respState: bodyRespState, type: bodyType } = body.typeCheck(state)
-      const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
-      if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can returns type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
-      capturesState = bodyRespState.outerScopeVars
-
-      if (requiredBodyType) {
-        bodyRespState.returnTypes.forEach(({ type, pos }) => {
-          Type.assertTypeAssignableTo(type, requiredBodyType, pos)
-        })
-      }
-
-      const returnType = requiredBodyType ?? bodyRespState.returnTypes.reduce((curType, returnType) => {
-        if (Type.isTypeAssignableTo(curType, returnType.type)) return curType
-        if (Type.isTypeAssignableTo(returnType.type, curType)) return returnType.type
-        throw new SemanticError(`This return has the type "${Type.repr(returnType.type)}", which is incompatible with another possible return types from this function, "${Type.repr(curType)}".`, returnType.pos)
-      }, bodyType)
-
-      finalType = types.createFunction({
-        paramTypes,
-        genericParamTypes,
-        bodyType: returnType,
-        purity,
-      })
-
-      const finalRespState = RespState.merge(...respStates, bodyRespState)
-      const newOuterScopeVars = finalRespState.outerScopeVars.filter(ident => TypeState.lookupVar(outerState, ident).fromOuterScope)
-      return {
-        respState: RespState.update(finalRespState, { outerScopeVars: newOuterScopeVars }),
-        type: finalType
-      }
+interface FunctionTypeContext { finalType: types.FunctionType, capturedStates: readonly string[] }
+export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionOpts) => Node.create<FunctionTypeContext>({
+  pos,
+  exec: (rt, { typeCheckContext: { finalType, capturedStates } }) => values.createFunction(
+    {
+      params,
+      body,
+      capturedScope: capturedStates.map(identifier => ({ identifier, value: Runtime.lookupVar(rt, identifier) })),
     },
-  })
-}
+    assertNotNullish(finalType),
+  ),
+  typeCheck: outerState => {
+    let state = TypeState.create({
+      scopes: [...outerState.scopes, new Map()],
+      definedTypes: [...outerState.definedTypes, new Map()],
+      minPurity: purity,
+      isBeginBlock: false,
+    })
+
+    const genericParamTypes = []
+    for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
+      const constraint_ = getConstraint(state, constraintPos)
+      const constraint = Type.createParameterType({
+        constrainedBy: constraint_,
+        parameterName: constraint_.reprOverride ?? 'UNKNOWN', // TODO: This UNKNOWN type shouldn't be a thing. Perhaps I shouldn't have had this parameterName idea.
+      })
+      genericParamTypes.push(constraint)
+      state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
+    }
+
+    const paramTypes = []
+    const respStates = []
+    for (const param of params) {
+      const { respState, type } = param.contextlessTypeCheck(state)
+      paramTypes.push(type)
+      respStates.push(RespState.update(respState, { declarations: [] }))
+      state = TypeState.applyDeclarations(state, respState)
+    }
+    const { respState: bodyRespState, type: bodyType } = body.typeCheck(state)
+    const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
+    if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can returns type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
+    const capturedStates = bodyRespState.outerScopeVars
+
+    if (requiredBodyType) {
+      for (const { type, pos } of bodyRespState.returnTypes) {
+        Type.assertTypeAssignableTo(type, requiredBodyType, pos)
+      }
+    }
+
+    const returnType = requiredBodyType ?? bodyRespState.returnTypes.reduce((curType, returnType) => {
+      if (Type.isTypeAssignableTo(curType, returnType.type)) return curType
+      if (Type.isTypeAssignableTo(returnType.type, curType)) return returnType.type
+      throw new SemanticError(`This return has the type "${Type.repr(returnType.type)}", which is incompatible with another possible return types from this function, "${Type.repr(curType)}".`, returnType.pos)
+    }, bodyType)
+
+    const finalType = types.createFunction({
+      paramTypes,
+      genericParamTypes,
+      bodyType: returnType,
+      purity,
+    })
+
+    const finalRespState = RespState.merge(...respStates, bodyRespState)
+    const newOuterScopeVars = finalRespState.outerScopeVars.filter(ident => TypeState.lookupVar(outerState, ident).fromOuterScope)
+    return {
+      respState: RespState.update(finalRespState, { outerScopeVars: newOuterScopeVars }),
+      type: finalType,
+      typeCheckContext: { finalType, capturedStates }
+    }
+  },
+})

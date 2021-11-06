@@ -15,17 +15,24 @@ export interface Node {
   readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
 
+interface NodeOpts<T> {
+  readonly pos?: Position.Position
+  readonly data?: unknown
+  readonly exec: (rt: Runtime.Runtime, { typeCheckContext }: { typeCheckContext: T }) => Value.AnyValue
+  readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType, typeCheckContext?: T }
+}
+
 interface InvokeNodeTypeCheckOpts { callWithPurity?: ValueOf<typeof PURITY> }
 interface InvokeNodeTypeCheckReturnValue { respState: RespState.RespState, type: Type.AnyType }
 export interface InvokeNode extends Omit<Node, 'typeCheck'> {
   readonly typeCheck: (state: TypeState.TypeState, opts?: InvokeNodeTypeCheckOpts) => InvokeNodeTypeCheckReturnValue
 }
 
-export const undeterminedType = Symbol('Undetermined Type')
+export const missingType = Symbol('Missing Type')
 
 interface AssignmentTargetNodeExecOpts { incomingValue: Value.AnyValue, allowFailure?: boolean }
 type AssignmentTargetNodeExecReturnType = { identifier: string, value: Value.AnyValue }[]
-interface AssignmentTargetNodeTypeCheckOpts { incomingType: Type.AnyType | typeof undeterminedType, allowWidening?: boolean }
+interface AssignmentTargetNodeTypeCheckOpts { incomingType: Type.AnyType | typeof missingType, allowWidening?: boolean }
 interface AssignmentTargetNodeTypeCheckReturnType { respState: RespState.RespState }
 export interface AssignmentTargetNode {
   readonly pos?: Position.Position
@@ -35,8 +42,24 @@ export interface AssignmentTargetNode {
   readonly contextlessTypeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
 
-export function create({ pos, data = undefined, exec, typeCheck }: Node): Node {
-  return { pos, data, exec, typeCheck }
+export function create<Context>({ pos, data = undefined, exec, typeCheck }: NodeOpts<Context>): Node {
+  let typeCheckRan = false
+  let context: Context | null = null
+  return {
+    pos,
+    data,
+    exec(rt: Runtime.Runtime) {
+      if (!typeCheckRan) throw new Error('INTERNAL ERROR: You must run type check first.')
+      return exec(rt, { typeCheckContext: context })
+    },
+    typeCheck(state: TypeState.TypeState) {
+      if (typeCheckRan) throw new Error('INTERNAL ERROR: Can not run type check multiple times.')
+      const { respState, type, typeCheckContext = null } = typeCheck(state)
+      typeCheckRan = true
+      context = typeCheckContext
+      return { respState, type }
+    },
+  }
 }
 
 export function createInvokeNode({ pos, data = undefined, exec, typeCheck }: InvokeNode): InvokeNode {

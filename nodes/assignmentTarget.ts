@@ -40,8 +40,8 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
     },
     typeCheck: (state, { incomingType, allowWidening = false }) => {
       typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
-      if (incomingType === Node.undeterminedType && !typeConstraint) throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
-      if (typeConstraint && incomingType !== Node.undeterminedType && !Type.isTypeAssignableTo(incomingType, typeConstraint)) {
+      if (incomingType === Node.missingType && !typeConstraint) throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
+      if (typeConstraint && incomingType !== Node.missingType && !Type.isTypeAssignableTo(incomingType, typeConstraint)) {
         if (!allowWidening) {
           throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(typeConstraint)}".`, DUMMY_POS)
         } else if (allowWidening && !Type.isTypeAssignableTo(typeConstraint, incomingType)) {
@@ -49,7 +49,7 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
         }
       }
       const finalType = typeConstraint ? typeConstraint : incomingType
-      if (finalType === Node.undeterminedType) throw new Error('INTERNAL ERROR')
+      if (finalType === Node.missingType) throw new Error('INTERNAL ERROR')
       return {
         respState: RespState.create({ declarations: [{ identifier, type: finalType, identPos }] }),
       }
@@ -71,7 +71,7 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
   exec: (rt, { incomingValue, allowFailure = false }) => {
     const allBindings = []
     for (const [identifier, assignmentTarget] of entries) {
-      if (types.isUnknown(incomingValue.type)) return null
+      if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
       const innerValue = assertRawRecordValue(incomingValue.raw).get(identifier)
       if (!innerValue) return null
       const bindings = assignmentTarget.exec(rt, { incomingValue: innerValue, allowFailure })
@@ -84,15 +84,15 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
     return allBindings
   },
   typeCheck: (state, { incomingType, allowWidening = false }) => {
-    if (incomingType !== Node.undeterminedType) Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
+    if (incomingType !== Node.missingType) Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
     const respStates = []
     for (const [identifier, assignmentTarget] of entries) {
-      let valueType = incomingType === Node.undeterminedType || types.isNever(incomingType)
+      let valueType = incomingType === Node.missingType || types.isEffectivelyNever(incomingType)
         ? incomingType
-        : assertRecordInnerDataType(incomingType.data).nameToType.get(identifier)
-      if (!valueType && allowWidening) valueType = Node.undeterminedType
+        : assertRecordInnerDataType(Type.assertIsConcreteType(incomingType).data).nameToType.get(identifier)
+      if (!valueType && allowWidening) valueType = Node.missingType
       if (!valueType) {
-        if (incomingType === Node.undeterminedType) throw new Error('INTERNAL ERROR')
+        if (incomingType === Node.missingType) throw new Error('INTERNAL ERROR')
         throw new SemanticError(`Unable to destructure property ${identifier} from type ${Type.repr(incomingType)}`, DUMMY_POS)
       }
       const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType, allowWidening })
