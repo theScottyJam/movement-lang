@@ -1,7 +1,6 @@
 import * as Type from './Type.js'
 import { PURITY, getPurityLevel } from './constants.js'
-
-export const anyParams = Symbol('Any Params') // Temporary. Won't be needed once spread syntax is in place, because you could just use the type `(...unknown[]) => unknown`
+import { zip } from '../util.js'
 
 export type UnitType = Type.ConcreteType<{ name: 'unit', data: undefined }>
 const unitCategory = Type.createCategory('unit', {
@@ -105,7 +104,7 @@ export const createRecord = (nameToType: RecordTypeData): RecordType => recordCa
 // Function //
 
 interface FunctionTypeData {
-  readonly paramTypes: readonly Type.AnyType[] | typeof anyParams
+  readonly paramTypes: readonly Type.AnyType[]
   readonly genericParamTypes: readonly Type.AnyParameterType[]
   readonly bodyType: Type.AnyType
   readonly purity: typeof PURITY[keyof typeof PURITY]
@@ -114,7 +113,7 @@ interface FunctionTypeData {
 export type FunctionType = Type.ConcreteType<{ name: 'function', data: FunctionTypeData }>
 const functionCategory = Type.createCategory('function', {
   repr: (self: FunctionType) => {
-    const paramsStr = self.data.paramTypes === anyParams ? '...#unknown[]' : self.data.paramTypes.map(t => Type.repr(t)).join(', ')
+    const paramsStr = self.data.paramTypes.map(t => Type.repr(t)).join(', ')
     if (self.data.purity === 'NONE') {
       return `#function(${paramsStr}) ${Type.repr(self.data.bodyType)}`
     } else {
@@ -123,51 +122,61 @@ const functionCategory = Type.createCategory('function', {
     }
   },
   compare: (self: FunctionType, other: FunctionType) => {
-    const comparePotentiallyGenericParams = (param: Type.AnyType, otherParam: Type.AnyType) => {
-      const genericIndex = Type.isTypeParameter(param)
-        ? self.data.genericParamTypes.findIndex(p => p.parameterSentinel === param.parameterSentinel)
+    const comparePotentiallyGenericValues = (assigner: Type.AnyType, assignee: Type.AnyType) => {
+      const assignerGenericIndex = Type.isTypeParameter(assigner)
+        ? self.data.genericParamTypes.findIndex(p => p.parameterSentinel === assigner.parameterSentinel)
         : -1
-      const otherGenericIndex = Type.isTypeParameter(otherParam)
-        ? other.data.genericParamTypes.findIndex(p => p.parameterSentinel === otherParam.parameterSentinel)
+      const assigneeGenericIndex = Type.isTypeParameter(assignee)
+        ? other.data.genericParamTypes.findIndex(p => p.parameterSentinel === assignee.parameterSentinel)
         : -1
 
-      if (otherGenericIndex !== -1) {
-        return genericIndex === otherGenericIndex
+      if (assigneeGenericIndex !== -1) {
+        // If the assignee has a generic param found in the function's generic param list
+        // then the assigner must also have it
+        return assignerGenericIndex === assigneeGenericIndex
       } else {
-        const concreteParam = Type.isTypeParameter(param) ? param.constrainedBy : param
-        return Type.isTypeAssignableTo(concreteParam, otherParam)
+        // If the assignee does not have a generic param found in the function's generic param list,
+        // it could still be generic, but all that needs to happen is for the assigner to be able to assign to the assignee.
+        // The assigner may still use a generic param from the generic param list
+        // (equality of generic param list is calculated elsewhere), or something like this.
+        const concreteAssigner = Type.isTypeParameter(assigner) ? assigner.constrainedBy : assigner
+        return Type.isTypeAssignableTo(concreteAssigner, assignee)
       }
     }
 
-    if (self.data.paramTypes !== anyParams && other.data.paramTypes !== anyParams) {
-      if (self.data.genericParamTypes.length !== other.data.genericParamTypes.length) return false
-      for (let i = 0; i < self.data.genericParamTypes.length; ++i) {
-        if (!Type.isTypeAssignableTo(self.data.genericParamTypes[i].constrainedBy, other.data.genericParamTypes[i].constrainedBy)) return false
-      }
-      if (self.data.paramTypes.length !== other.data.paramTypes.length) return false
-      
-      for (let i = 0; i < self.data.paramTypes.length; ++i) {
-        if (!comparePotentiallyGenericParams(self.data.paramTypes[i], other.data.paramTypes[i])) return false
-      }
-    }
-    if (!comparePotentiallyGenericParams(self.data.bodyType, other.data.bodyType)) return false
-    if (getPurityLevel(self.data.purity) < getPurityLevel(other.data.purity)) return false
-    return true
+    type GenericParamsType = typeof self.data.genericParamTypes
+    const genericParamsMatchUp = (assignerGenerics: GenericParamsType, assigneeGenerics: GenericParamsType) => (
+      assignerGenerics.length === assigneeGenerics.length &&
+      zip(assignerGenerics, assigneeGenerics)
+        .every(([ownGeneric, otherGeneric]) => Type.isTypeAssignableTo(ownGeneric.constrainedBy, otherGeneric.constrainedBy))
+    )
+
+    type ParamsType = readonly Type.AnyType[]
+    const paramsMatchUp = (assignerParams: ParamsType, assigneeParams: ParamsType) => (
+      assignerParams.length === assigneeParams.length &&
+      zip(assignerParams, assigneeParams)
+        .every(([ownParamType, otherParamType]) => comparePotentiallyGenericValues(ownParamType, otherParamType))
+    )
+
+    return (
+      genericParamsMatchUp(self.data.genericParamTypes, other.data.genericParamTypes) &&
+      paramsMatchUp(self.data.paramTypes, other.data.paramTypes) &&
+      comparePotentiallyGenericValues(self.data.bodyType, other.data.bodyType) &&
+      getPurityLevel(self.data.purity) >= getPurityLevel(other.data.purity)
+    )
   },
   matchUpGenerics: (self: FunctionType, { usingType, onGeneric }) => {
-    if (self.data.paramTypes !== anyParams) {
-      for (const [i, t] of self.data.paramTypes.entries()) {
-        Type.matchUpGenerics(t, {
-          usingType: usingType.data.paramTypes[i],
-          onGeneric,
-        })
-      }
+    for (const [t, usingTypeParamType] of zip(self.data.paramTypes, usingType.data.paramTypes)) {
+      Type.matchUpGenerics(t, {
+        usingType: usingTypeParamType,
+        onGeneric,
+      })
     }
     Type.matchUpGenerics(self.data.bodyType, { usingType: usingType.data.bodyType, onGeneric })
   },
   fillGenericParams: (self: FunctionType, { getReplacement }) => {
     return createFunction({
-      paramTypes: self.data.paramTypes === anyParams ? anyParams : self.data.paramTypes.map(t => Type.fillGenericParams(t, { getReplacement })),
+      paramTypes: self.data.paramTypes.map(t => Type.fillGenericParams(t, { getReplacement })),
       genericParamTypes: self.data.genericParamTypes,
       bodyType: Type.fillGenericParams(self.data.bodyType, { getReplacement }),
       purity: self.data.purity,
@@ -183,3 +192,4 @@ export const createFunction = ({ paramTypes, genericParamTypes, bodyType, purity
     purity,
   },
 })
+export const isFunction = (type: Type.AnyConcreteType): type is FunctionType => functionCategory.typeInCategory(type)

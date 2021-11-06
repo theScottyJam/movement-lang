@@ -283,15 +283,15 @@ expr70
 
 expr80
   -> expr80 _ (genericParamList _):? "(" _ deliminated[expr10, "," _, ("," _):?] ")" {%
-    ([fnExpr,, genericParamListEntry, ,, params]) => {
+    ([fnExpr,, genericParamListEntry, ,, args]) => {
       const [genericParams] = genericParamListEntry ?? [[]]
-      return nodes.invoke(DUMMY_POS, { fnExpr, genericParams, params: params.flat() })
+      return nodes.invoke(DUMMY_POS, { fnExpr, genericParams, args: args.flat() })
     }
   %} | expr90 {% id %}
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
-      ([,, entries]) => entries.map(([getType]) => ({ getType, loc: DUMMY_POS }))
+      ([,, entries]) => entries.map(([getType]) => ({ getType, pos: DUMMY_POS }))
     %}
 
 expr90
@@ -364,9 +364,13 @@ pattern30
   const createFnTypeGetter = ({ purity, genericParamDefList, paramTypeGetters, getBodyType }) => (state, pos) => {
     let constraints = []
     for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
-      const constraint = getConstraint(state, constraintPos).asNewInstance()
+      const constraint_ = getConstraint(state, constraintPos)
+      const constraint = Type.createParameterType({
+        constrainedBy: constraint_,
+        parameterName: constraint_.reprOverride ?? 'UNKNOWN' // TODO: This parameterName was probably a bad idea.
+      })
       constraints.push(constraint)
-      state = state.addToTypeScope(identifier, () => constraint, identPos)
+      state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
     }
     return types.createFunction({
       paramTypes: paramTypeGetters.map(getType => getType(state, pos)),

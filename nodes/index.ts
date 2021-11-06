@@ -17,7 +17,7 @@ import * as RespState from '../language/RespState.js'
 import * as Type from '../language/Type.js'
 import * as types from '../language/types.js'
 import { PURITY, getPurityLevel } from '../language/constants.js'
-
+import { zip, zip3 } from '../util.js'
 export * as value from './value.js'
 export * as assignmentTarget from './assignmentTarget.js'
 
@@ -229,9 +229,9 @@ export const typeAssertion = (pos: Position, { expr, getType, typePos, operatorA
   })
 }
 
-interface GenericParam { getType: TypeGetter, loc: Position }
-interface InvokeOpts { fnExpr: Node, genericParams: GenericParam[], params: Node[] }
-export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeOpts) => Node.createInvokeNode({
+interface GenericParam { getType: TypeGetter, pos: Position }
+interface InvokeOpts { fnExpr: Node, genericParams: GenericParam[], args: Node[] }
+export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpts) => Node.createInvokeNode({
   pos,
   data: {
     type: 'INVOKE',
@@ -239,9 +239,8 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
   exec: rt => {
     const fn = assertRawFunctionValue(fnExpr.exec(rt).raw)
     rt = Runtime.update(rt, { scopes: fn.capturedScope })
-    const paramValues = params.map(param => param.exec(rt))
-    for (const [i, param] of fn.params.entries()) {
-      const value = paramValues[i]
+    const argValues = args.map(arg => arg.exec(rt))
+    for (const [param, value] of zip(fn.params, argValues)) {
       const allBindings = param.exec(rt, { incomingValue: value })
       rt = Runtime.update(rt, { scopes: [...rt.scopes, ...allBindings] })
     }
@@ -254,62 +253,68 @@ export const invoke = (pos: Position, { fnExpr, genericParams, params }: InvokeO
   },
   typeCheck: (state, { callWithPurity = PURITY.pure } = {}) => {
     const { respState: fnRespState, type: fnType } = fnExpr.typeCheck(state)
-    const fnTypeData = assertFunctionInnerDataType(Type.assertIsConcreteType(fnType).data)
+    // Type check function expression
+    if (Type.isTypeParameter(fnType) || !types.isFunction(fnType)) {
+      throw new SemanticError(`Found type "${Type.repr(fnType)}", but expected a function.`, fnExpr.pos)
+    }
+    const fnTypeData = assertFunctionInnerDataType(fnType.data)
 
+    // Ensure it's called with the right number of generic params
     if (genericParams.length > fnTypeData.genericParamTypes.length) {
       throw new SemanticError(`The function of type ${Type.repr(fnType)} must be called with at most ${fnTypeData.genericParamTypes.length} generic parameters, but got called with ${genericParams.length}.`, pos)
     }
-    let createdGenericParams = new Map()
-    for (let i = 0; i < genericParams.length; ++i) {
-      const { getType, loc: pos } = genericParams[i]
-      const type = getType(state, pos)
-      Type.assertTypeAssignableTo(type, fnTypeData.genericParamTypes[i].constrainedBy, pos)
-      createdGenericParams.set(fnTypeData.genericParamTypes[i].parameterSentinel, type)
+    // Figure out the values of the generic params, and make sure they hold against the constraints
+    let valuesOfGenericParams = new Map()
+    for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes)) {
+      const type = assignerGenericParam.getType(state, assignerGenericParam.pos)
+      Type.assertTypeAssignableTo(type, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
+      valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, type)
     }
 
-    const paramsTypeChecked = params.map(p => p.typeCheck(state))
-    const paramTypes = paramsTypeChecked.map(p => p.type)
-    const paramRespStates = paramsTypeChecked.map(p => p.respState)
-    const anyFn = types.createFunction({ paramTypes: types.anyParams, genericParamTypes: [], bodyType: types.createUnknown(), purity: PURITY.none })
-    Type.assertTypeAssignableTo(fnType, anyFn, fnExpr.pos, `Found type ${Type.repr(fnType)} but expected a function.`)
-    if (fnTypeData.paramTypes === types.anyParams) throw new Error('Internal Error: This should never be set to anyParams')
-    if (fnTypeData.paramTypes.length !== paramTypes.length) {
-      throw new SemanticError(`Found ${paramTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
+    // Type check args
+    const argsTypeChecked = args.map(p => p.typeCheck(state))
+    const argTypes = argsTypeChecked.map(p => p.type)
+    const argRespStates = argsTypeChecked.map(p => p.respState)
+    if (fnTypeData.paramTypes.length !== argTypes.length) {
+      throw new SemanticError(`Found ${argTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
-    for (let i = 0; i < fnTypeData.paramTypes.length; ++i) {
-      const someType = fnTypeData.paramTypes[i]
-      const concrete = Type.isTypeParameter(someType) ? someType.constrainedBy : someType
-      Type.assertTypeAssignableTo(paramTypes[i], concrete, params[i].pos)
-      Type.matchUpGenerics(fnTypeData.paramTypes[i], {
-        usingType: paramTypes[i],
+    for (const [arg, assignerParamType, assigneeParamType] of zip3(args, argTypes, fnTypeData.paramTypes)) {
+      const concrete = Type.isTypeParameter(assigneeParamType) ? assigneeParamType.constrainedBy : assigneeParamType
+      Type.assertTypeAssignableTo(assignerParamType, concrete, arg.pos)
+      // Check that it uses generics properly
+      Type.matchUpGenerics(assigneeParamType, {
+        usingType: assignerParamType,
         onGeneric({ self, other }) {
-          const genericValue = createdGenericParams.get(self.parameterSentinel)
+          const genericValue = valuesOfGenericParams.get(self.parameterSentinel)
           if (!genericValue) {
             Type.assertTypeAssignableTo(other, self, DUMMY_POS)
-            createdGenericParams.set(self.parameterSentinel, other)
+            valuesOfGenericParams.set(self.parameterSentinel, other)
           } else {
             Type.assertTypeAssignableTo(other, genericValue, DUMMY_POS)
           }
         },
       })
     }
+    // Check purity level
     if (getPurityLevel(fnTypeData.purity) < getPurityLevel(state.minPurity)) {
       throw new SemanticError(`Attempted to call a function which was less pure than its containing environment.`, fnExpr.pos)
     }
 
-    const getPurityAnnotationMsg = purity => ({ PURE: 'not use any purity annotations', GETS: 'use "get"', NONE: 'use "run"' })[purity]
+    // Check purity annotation
     if (getPurityLevel(fnTypeData.purity) !== getPurityLevel(callWithPurity)) {
-      throw new SemanticError(`Attempted to do this function call with the wrong purity annotation. You must ${getPurityAnnotationMsg(fnTypeData.purity)}`, pos)
+      const purityAnnotationMsgs = { PURE: 'not use any purity annotations', GETS: 'use "get"', NONE: 'use "run"' }
+      throw new SemanticError(`Attempted to do this function call with the wrong purity annotation. You must ${purityAnnotationMsgs[fnTypeData.purity]}`, pos)
     }
 
+    // Make generic return type into concrete type
     let returnType = Type.fillGenericParams(fnTypeData.bodyType, {
       getReplacement(type) {
-        const concreteType = createdGenericParams.get(type.parameterSentinel)
+        const concreteType = valuesOfGenericParams.get(type.parameterSentinel)
         if (!concreteType) throw new SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it.`, pos)
         return concreteType
       }
     })
-    return { respState: RespState.merge(fnRespState, ...paramRespStates), type: returnType }
+    return { respState: RespState.merge(fnRespState, ...argRespStates), type: returnType }
   },
 })
 
