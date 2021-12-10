@@ -1,5 +1,5 @@
-import * as values from '../../language/values.js'
-import * as types from '../../language/types.js'
+import * as values from '../../language/values'
+import * as types from '../../language/types'
 
 export function assertNotNullish<T>(value: T | null): T {
   if (value == null) {

@@ -1,6 +1,6 @@
-import * as Type from './Type.js'
-import { PURITY, getPurityLevel } from './constants.js'
-import { zip } from '../util.js'
+import * as Type from './Type'
+import { PURITY, getPurityLevel } from './constants'
+import { zip } from '../util'
 
 export type UnitType = Type.ConcreteType<{ name: 'unit', data: undefined }>
 const unitCategory = Type.createCategory('unit', {
@@ -122,7 +122,7 @@ const functionCategory = Type.createCategory('function', {
     }
   },
   compare: (self: FunctionType, other: FunctionType) => {
-    const comparePotentiallyGenericValues = (assigner: Type.AnyType, assignee: Type.AnyType) => {
+    const comparePotentiallyGenericValues = (assigner: Type.AnyType, assignee: Type.AnyType, { selfIsWider }: { selfIsWider: boolean }) => {
       const assignerGenericIndex = Type.isTypeParameter(assigner)
         ? self.data.genericParamTypes.findIndex(p => p.parameterSentinel === assigner.parameterSentinel)
         : -1
@@ -136,11 +136,14 @@ const functionCategory = Type.createCategory('function', {
         return assignerGenericIndex === assigneeGenericIndex
       } else {
         // If the assignee does not have a generic param found in the function's generic param list,
-        // it could still be generic, but all that needs to happen is for the assigner to be able to assign to the assignee.
+        // it could still be generic, but all that needs to happen is for the assigner to be able to assign
+        // to the assignee (or vice-verca, depending on the comparison direction).
         // The assigner may still use a generic param from the generic param list
         // (equality of generic param list is calculated elsewhere), or something like this.
         const concreteAssigner = Type.isTypeParameter(assigner) ? assigner.constrainedBy : assigner
-        return Type.isTypeAssignableTo(concreteAssigner, assignee)
+        return selfIsWider
+          ? Type.isTypeAssignableTo(concreteAssigner, assignee)
+          : Type.isTypeAssignableTo(assignee, concreteAssigner)
       }
     }
 
@@ -155,13 +158,13 @@ const functionCategory = Type.createCategory('function', {
     const paramsMatchUp = (assignerParams: ParamsType, assigneeParams: ParamsType) => (
       assignerParams.length === assigneeParams.length &&
       zip(assignerParams, assigneeParams)
-        .every(([ownParamType, otherParamType]) => comparePotentiallyGenericValues(ownParamType, otherParamType))
+        .every(([ownParamType, otherParamType]) => comparePotentiallyGenericValues(ownParamType, otherParamType, { selfIsWider: false }))
     )
 
     return (
       genericParamsMatchUp(self.data.genericParamTypes, other.data.genericParamTypes) &&
       paramsMatchUp(self.data.paramTypes, other.data.paramTypes) &&
-      comparePotentiallyGenericValues(self.data.bodyType, other.data.bodyType) &&
+      comparePotentiallyGenericValues(self.data.bodyType, other.data.bodyType, { selfIsWider: true }) &&
       getPurityLevel(self.data.purity) >= getPurityLevel(other.data.purity)
     )
   },

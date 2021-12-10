@@ -1,5 +1,5 @@
-import { SemanticError } from './exceptions.js'
-import type { Position } from './Position.js'
+import { SemanticError } from './exceptions'
+import type { Position } from './Position'
 
 const categoryBehaviors = Symbol('Category behaviors')
 
@@ -181,7 +181,7 @@ export function withName<T extends CategoryGenerics>(type: Type<T>, newName: str
 
 export function repr<T extends CategoryGenerics>(type: Type<T>): string {
   if (isTypeParameter(type)) return type.parameterName
-  else type.reprOverride ?? type.category[categoryBehaviors].repr(type)
+  else return type.reprOverride ?? type.category[categoryBehaviors].repr(type)
 }
 
 // Match up one type with this type, and call onGeneric() every time a generic parameter is reached.

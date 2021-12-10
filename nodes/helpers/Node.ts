@@ -9,6 +9,7 @@ import { PURITY } from '../../language/constants'
 type ValueOf<T> = T[keyof T]
 
 export interface Node {
+  readonly name: string
   readonly pos?: Position.Position
   readonly data?: unknown
   readonly exec: (rt: Runtime.Runtime) => Value.AnyValue
@@ -16,6 +17,7 @@ export interface Node {
 }
 
 interface NodeOpts<T> {
+  readonly name: string
   readonly pos?: Position.Position
   readonly data?: unknown
   readonly exec: (rt: Runtime.Runtime, { typeCheckContext }: { typeCheckContext: T }) => Value.AnyValue
@@ -35,6 +37,7 @@ type AssignmentTargetNodeExecReturnType = { identifier: string, value: Value.Any
 interface AssignmentTargetNodeTypeCheckOpts { incomingType: Type.AnyType | typeof missingType, allowWidening?: boolean }
 interface AssignmentTargetNodeTypeCheckReturnType { respState: RespState.RespState }
 export interface AssignmentTargetNode {
+  readonly name: string
   readonly pos?: Position.Position
   readonly exec: (rt: Runtime.Runtime, opts: AssignmentTargetNodeExecOpts) => AssignmentTargetNodeExecReturnType
   // TODO: Rename these fields to something better?
@@ -42,10 +45,11 @@ export interface AssignmentTargetNode {
   readonly contextlessTypeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
 
-export function create<Context>({ pos, data = undefined, exec, typeCheck }: NodeOpts<Context>): Node {
+export function create<Context>({ name, pos, data = undefined, exec, typeCheck }: NodeOpts<Context>): Node {
   let typeCheckRan = false
   let context: Context | null = null
   return {
+    name,
     pos,
     data,
     exec(rt: Runtime.Runtime) {
@@ -62,10 +66,10 @@ export function create<Context>({ pos, data = undefined, exec, typeCheck }: Node
   }
 }
 
-export function createInvokeNode({ pos, data = undefined, exec, typeCheck }: InvokeNode): InvokeNode {
-  return { pos, data, exec, typeCheck }
+export function createInvokeNode({ name, pos, data = undefined, exec, typeCheck }: InvokeNode): InvokeNode {
+  return { name, pos, data, exec, typeCheck }
 }
 
-export function createAssignmentTarget({ pos, exec, typeCheck, contextlessTypeCheck }: AssignmentTargetNode): AssignmentTargetNode {
-  return { pos, exec, typeCheck, contextlessTypeCheck }
+export function createAssignmentTarget({ name, pos, exec, typeCheck, contextlessTypeCheck }: AssignmentTargetNode): AssignmentTargetNode {
+  return { name, pos, exec, typeCheck, contextlessTypeCheck }
 }

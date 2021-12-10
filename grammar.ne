@@ -13,14 +13,14 @@
 @preprocessor typescript
 
 @{%
-  import * as nodes from './nodes/index.js'
+  import * as nodes from './nodes/index'
   import moo from 'moo'
-  import * as Type from './language/Type.js'
-  import * as types from './language/types.js'
-  import * as TypeState from './language/TypeState.js'
-  import { PURITY } from './language/constants.js'
-  import { from as asPos, range } from './language/Position.js'
-  import { SemanticError } from './language/exceptions.js'
+  import * as Type from './language/Type'
+  import * as types from './language/types'
+  import * as TypeState from './language/TypeState'
+  import { PURITY } from './language/constants'
+  import { from as asPos, range } from './language/Position'
+  import { SemanticError } from './language/exceptions'
 
   const mapMapValues = (map, mapFn) => (
     new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
@@ -66,6 +66,7 @@
       "is" return 'IS'
       */
       'print': 'print',
+      '_printType': '_printType',
 
       ',': ',',
       /*
@@ -80,6 +81,7 @@
       '>': '>',
       ':': ':',
       '@': '@',
+      ';': ';',
 
       'if': 'if',
       'then': 'then',
@@ -146,10 +148,10 @@ root
   %}
 
 module
-  -> deliminated[moduleLevelStatement, _, ignore] (_ %begin _ block):? {%
+  -> deliminated[moduleLevelStatement ";":?, _, ignore] (_ %begin _ block):? {%
     ([statementEntries, beginBlockEntry]) => {
       const [,,, beginBlock] = beginBlockEntry ?? [,,, null]
-      const statements = statementEntries.flat()
+      const statements = statementEntries.map(x => x[0]).flat()
       return [...statements].reverse().reduce((previousNode, makeNode) => (
         makeNode(previousNode)
       ), beginBlock ? nodes.beginBlock(DUMMY_POS, beginBlock) : nodes.noop())
@@ -157,7 +159,7 @@ module
   %}
 
 block
-  -> "{" _ (statement _):* "}" {%
+  -> "{" _ (statement ";":? _):* "}" {%
     ([start,, statementEntries, end]) => {
       const statements = statementEntries.map(([statement]) => statement)
       const content = [...statements].reverse().reduce((previousNode, makeNode) => (
@@ -206,6 +208,11 @@ moduleLevelStatement
       nodes.print(range(print, r.pos), { r }),
       nextNode,
     ])
+  %} | "_printType" _ expr10 {%
+    ([print,, r]) => nextNode => nodes.sequence([
+      nodes.printType(range(print, r.pos), { r }),
+      nextNode,
+    ])
   %} | "function" _ identifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
     ([function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
       const [genericParamDefList] = genericDefListEntry ?? [[]]
@@ -226,12 +233,14 @@ moduleLevelStatement
 expr10
   -> "print" _ expr10 {%
     ([print, _, r]) => nodes.print(range(print, r.pos), { r })
+  %} | "_printType" _ expr10 {%
+    ([print, _, r]) => nodes.printType(range(print, r.pos), { r })
   %} | ("let" _ assignmentTarget _ "=" _ expr10 _):+ "in" _ expr10 {%
     ([declarationEntries, ,, expr]) => {
       const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
         { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
       ))
-      return nodes.declaration(DUMMY_POS, { declarations, expr })
+      return nodes.declaration(DUMMY_POS, { declarations, expr, newScope: true })
     }
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })

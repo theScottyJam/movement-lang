@@ -26,4 +26,10 @@ export class FlowControlReturnError extends FlowControlBaseError {
   }
 }
 
-export class RuntimeError extends Error {}
+export class RuntimeError extends Error {
+  public testCode
+  constructor(message, { testCode = 'runtimeError' } = {}) {
+    super(message)
+    this.testCode = testCode
+  }
+}

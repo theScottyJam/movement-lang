@@ -5,8 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "nearleyc grammar.ne -o grammar.built.ts && node --loader ts-node/esm ./index.ts",
-    "test": "jest"
+    "start": "nearleyc grammar.ne -o grammar.built.ts && node --es-module-specifier-resolution=node --loader ts-node/esm ./index.ts",
+    "test": "nearleyc grammar.ne -o grammar.built.ts && jest",
+    "test-watch": "echo '===================================' && echo 'WARNING: ne files do not auto-build' && echo '===================================' && nearleyc grammar.ne -o grammar.built.ts && jest --watch"
   },
   "author": "thescottyjam <theScottyJam@gmail.com>",
   "license": "MIT",
@@ -17,6 +18,10 @@
     "ts-node": "^10.2.1"
   },
   "devDependencies": {
+    "@babel/core": "^7.16.0",
+    "@babel/preset-env": "^7.16.0",
+    "@babel/preset-typescript": "^7.16.0",
+    "babel-jest": "^27.3.1",
     "jest": "^27.0.6",
     "typescript": "^4.4.3"
   }

@@ -1,13 +1,13 @@
 import type { Token } from 'moo'
-import * as Node from './helpers/Node.js';
-import { assertRawRecordValue, assertRecordInnerDataType } from './helpers/typeAssertions.js';
-import { SemanticError, RuntimeError } from '../language/exceptions.js'
-import * as Position from '../language/Position.js'
-import * as Runtime from '../language/Runtime.js'
-import * as TypeState from '../language/TypeState.js'
-import * as RespState from '../language/RespState.js'
-import * as Type from '../language/Type.js'
-import * as types from '../language/types.js'
+import * as Node from './helpers/Node';
+import { assertRawRecordValue, assertRecordInnerDataType } from './helpers/typeAssertions';
+import { SemanticError, RuntimeError } from '../language/exceptions'
+import * as Position from '../language/Position'
+import * as Runtime from '../language/Runtime'
+import * as TypeState from '../language/TypeState'
+import * as RespState from '../language/RespState'
+import * as Type from '../language/Type'
+import * as types from '../language/types'
 
 type Node = Node.Node
 type AssignmentTargetNode = Node.AssignmentTargetNode
@@ -30,6 +30,7 @@ interface BindOpts {
 export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, typeConstraintPos }: BindOpts) => {
   let typeConstraint: AnyType | null
   return Node.createAssignmentTarget({
+    name: 'bind',
     pos,
     exec: (rt, { incomingValue, allowFailure = false }) => {
       if (typeConstraint && !Type.isTypeAssignableTo(incomingValue.type, typeConstraint)) {
@@ -67,6 +68,7 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
 
 interface DestructurObjOpts { entries: Map<string, AssignmentTargetNode> }
 export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) => Node.createAssignmentTarget({
+  name: 'destructureObj',
   pos,
   exec: (rt, { incomingValue, allowFailure = false }) => {
     const allBindings = []
@@ -121,6 +123,7 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
 
 interface ValueConstraintOpts { assignmentTarget: AssignmentTargetNode, constraint: Node }
 export const valueConstraint = (pos: Position, { assignmentTarget, constraint }: ValueConstraintOpts) => Node.createAssignmentTarget({
+  name: 'valueConstraint',
   pos,
   exec: (rt, { incomingValue, allowFailure = false }) => {
     const bindings = assignmentTarget.exec(rt, { incomingValue, allowFailure })
@@ -129,7 +132,7 @@ export const valueConstraint = (pos: Position, { assignmentTarget, constraint }:
     const success = constraint.exec(rt)
     if (!success.raw) {
       if (allowFailure) return null
-      throw new RuntimeError('Value Constraint failed.')
+      throw new RuntimeError('Value Constraint failed.', { testCode: 'failedValueConstraint' })
     }
     return bindings
   },

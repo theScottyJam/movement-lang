@@ -1,8 +1,9 @@
 import nearley from 'nearley'
-import { BadSyntaxError, SemanticError } from './language/exceptions.js'
-import builtGrammar from './grammar.built.js'
+import { BadSyntaxError, SemanticError } from './language/exceptions'
+import * as Type from './language/Type'
+import builtGrammar from './grammar.built'
 
-const parser = new nearley.Parser(nearley.Grammar.fromCompiled(builtGrammar));
+const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)
 
 const termColors = {
   bold: '\u001b[1m',
@@ -12,6 +13,9 @@ const termColors = {
 }
 
 function parse(text) {
+  // A fresh parser needs to be made between each parse.
+  const parser = new nearley.Parser(compiledGrammar);
+
   parser.feed(text)
   if (parser.results.length === 0) throw new BadSyntaxError('Unexpected end-of-file.', null)
   if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
@@ -107,8 +111,13 @@ export function run(text) {
 export function testRun(text) {
   let result = []
 
+
   const ast = parse(text)
-  ast.typeCheck()
+  ast.typeCheck({
+    behaviors: {
+      showDebugTypeOutput: type => result.push(Type.repr(type))
+    }
+  })
   ast.exec({
     behaviors: {
       showDebugOutput: value => result.push(value)

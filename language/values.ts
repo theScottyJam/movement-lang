@@ -1,7 +1,7 @@
-import * as Value from './Value.js'
-import * as types from './types.js'
-import type { RuntimeScope } from './Runtime.js'
-import type { AssignmentTargetNode, Node } from '../nodes/helpers/Node.js' // TODO: This seems bad to import from here
+import * as Value from './Value'
+import * as types from './types'
+import type { RuntimeScope } from './Runtime'
+import type { AssignmentTargetNode, Node } from '../nodes/helpers/Node' // TODO: This seems bad to import from here
 
 export type UnitValue = Value.Value<types.UnitType, undefined>
 export const createUnit = (): UnitValue => Value.create({ raw: undefined, type: types.createUnit() })

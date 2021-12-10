@@ -1,13 +1,18 @@
-import type { Position } from './Position.js'
-import type { RespState } from './RespState.js'
-import type * as Type from './Type.js'
-import { SemanticError } from './exceptions.js'
-import { PURITY } from './constants.js'
+import type { Position } from './Position'
+import type { RespState } from './RespState'
+import * as Type from './Type'
+import { SemanticError } from './exceptions'
+import { PURITY } from './constants'
 
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 type createTypeFn = () => Type.AnyType
 
+export interface TypeStateBehaviors {
+  readonly showDebugTypeOutput: (value: Type.AnyType) => void
+}
+
 export interface TypeState {
+  readonly behaviors: Partial<TypeStateBehaviors>
   // The types of specific values in different scopes.
   // e.g. let x = 2 adds an entry for "x" in the current scope.
   readonly scopes: readonly Map<string, Type.AnyType>[]
@@ -21,10 +26,15 @@ export interface TypeState {
   readonly isBeginBlock: boolean
 }
 
+function defaultShowDebugTypeOutputFn(value: Type.AnyType) {
+  console.info(Type.repr(value))
+}
+
 const top = <T>(array: readonly T[]): T => array[array.length - 1]
 
 export function create(opts: Partial<TypeState> = {}): TypeState {
   const {
+    behaviors = { showDebugTypeOutput: null },
     scopes = [new Map()],
     definedTypes = [new Map()],
     minPurity = PURITY.pure,
@@ -32,6 +42,9 @@ export function create(opts: Partial<TypeState> = {}): TypeState {
   } = opts
 
   return {
+    behaviors: {
+      showDebugTypeOutput: behaviors.showDebugTypeOutput ?? defaultShowDebugTypeOutputFn
+    },
     scopes,
     definedTypes,
     minPurity,
@@ -41,6 +54,7 @@ export function create(opts: Partial<TypeState> = {}): TypeState {
 
 export function update(typeState: TypeState, opts: Partial<TypeState>): TypeState {
   return create({
+    behaviors: typeState.behaviors,
     scopes: opts.scopes ?? typeState.scopes,
     definedTypes: opts.definedTypes ?? typeState.definedTypes,
     minPurity: opts.minPurity ?? typeState.minPurity,

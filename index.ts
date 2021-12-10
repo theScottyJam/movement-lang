@@ -7,6 +7,6 @@ globalThis.debug = (...args) => {
 
 run(`\
 begin {
-  print 'hello world'
+  _printType 'hello world'
 }
 `)

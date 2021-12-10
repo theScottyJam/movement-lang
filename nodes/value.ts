@@ -1,14 +1,14 @@
-import * as Node from './helpers/Node.js';
-import { assertNotNullish } from './helpers/typeAssertions.js';
-import { BadSyntaxError, SemanticError } from '../language/exceptions.js'
-import * as Position from '../language/Position.js'
-import * as Runtime from '../language/Runtime.js'
-import * as values from '../language/values.js'
-import * as TypeState from '../language/TypeState.js'
-import * as RespState from '../language/RespState.js'
-import * as Type from '../language/Type.js'
-import * as types from '../language/types.js'
-import { PURITY } from '../language/constants.js'
+import * as Node from './helpers/Node';
+import { assertNotNullish } from './helpers/typeAssertions';
+import { BadSyntaxError, SemanticError } from '../language/exceptions'
+import * as Position from '../language/Position'
+import * as Runtime from '../language/Runtime'
+import * as values from '../language/values'
+import * as TypeState from '../language/TypeState'
+import * as RespState from '../language/RespState'
+import * as Type from '../language/Type'
+import * as types from '../language/types'
+import { PURITY } from '../language/constants'
 
 type Node = Node.Node
 type AssignmentTargetNode = Node.AssignmentTargetNode
@@ -24,6 +24,7 @@ type ConcreteTypeGetter = (TypeState, Position) => Type.AnyConcreteType
 
 interface IntOpts { value: bigint }
 export const int = (pos: Position, { value }: IntOpts) => Node.create({
+  name: 'int',
   pos,
   exec: rt => values.createInt(value),
   typeCheck: state => ({ respState: RespState.create(), type: types.createInt() }),
@@ -59,6 +60,7 @@ interface StringOpts { uninterpretedValue: string }
 export const string = (pos: Position, { uninterpretedValue }: StringOpts) => {
   const value = parseEscapeSequences(uninterpretedValue, pos)
   return Node.create({
+    name: 'string',
     pos,
     exec: rt => values.createString(value),
     typeCheck: state => ({ respState: RespState.create(), type: types.createString() }),
@@ -67,6 +69,7 @@ export const string = (pos: Position, { uninterpretedValue }: StringOpts) => {
 
 interface BooleanOpts { value: boolean }
 export const boolean = (pos: Position, { value }: BooleanOpts) => Node.create({
+  name: 'boolean',
   pos,
   exec: rt => values.createBoolean(value),
   typeCheck: state => ({ respState: RespState.create(), type: types.createBoolean() }),
@@ -77,6 +80,7 @@ interface RecordOpts { content: Map<string, RecordValueDescription> }
 export const record = (pos: Position, { content }: RecordOpts) => {
   let finalType: types.RecordType | null
   return Node.create({
+    name: 'record',
     pos,
     exec: rt => {
       const nameToValue = new Map()
@@ -118,6 +122,7 @@ interface FunctionOpts {
 }
 interface FunctionTypeContext { finalType: types.FunctionType, capturedStates: readonly string[] }
 export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionOpts) => Node.create<FunctionTypeContext>({
+  name: 'function',
   pos,
   exec: (rt, { typeCheckContext: { finalType, capturedStates } }) => values.createFunction(
     {
@@ -133,8 +138,10 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       definedTypes: [...outerState.definedTypes, new Map()],
       minPurity: purity,
       isBeginBlock: false,
+      behaviors: outerState.behaviors,
     })
 
+    // Adding generic params to type scope
     const genericParamTypes = []
     for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
       const constraint_ = getConstraint(state, constraintPos)
@@ -146,6 +153,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
     }
 
+    // Validating parameters
     const paramTypes = []
     const respStates = []
     for (const param of params) {
@@ -154,17 +162,23 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       respStates.push(RespState.update(respState, { declarations: [] }))
       state = TypeState.applyDeclarations(state, respState)
     }
+
+    // Type checking body
     const { respState: bodyRespState, type: bodyType } = body.typeCheck(state)
+
+    // Getting declared body type
     const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
     if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can returns type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
     const capturedStates = bodyRespState.outerScopeVars
 
+    // Checking if calculated return types line up with declared body type
     if (requiredBodyType) {
       for (const { type, pos } of bodyRespState.returnTypes) {
         Type.assertTypeAssignableTo(type, requiredBodyType, pos)
       }
     }
 
+    // Finding widest calculated return type
     const returnType = requiredBodyType ?? bodyRespState.returnTypes.reduce((curType, returnType) => {
       if (Type.isTypeAssignableTo(curType, returnType.type)) return curType
       if (Type.isTypeAssignableTo(returnType.type, curType)) return returnType.type

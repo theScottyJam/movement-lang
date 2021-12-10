@@ -1,25 +1,25 @@
 import type { Token } from 'moo'
-import * as Node from './helpers/Node.js';
+import * as Node from './helpers/Node';
 import {
   assertBigInt,
   assertRawRecordValue,
   assertRecordInnerDataType,
   assertRawFunctionValue,
   assertFunctionInnerDataType,
-} from './helpers/typeAssertions.js';
-import { RuntimeError, SemanticError, FlowControlReturnError } from '../language/exceptions.js'
-import * as Position from '../language/Position.js'
-import * as Runtime from '../language/Runtime.js'
-import * as Value from '../language/Value.js'
-import * as values from '../language/values.js'
-import * as TypeState from '../language/TypeState.js'
-import * as RespState from '../language/RespState.js'
-import * as Type from '../language/Type.js'
-import * as types from '../language/types.js'
-import { PURITY, getPurityLevel } from '../language/constants.js'
-import { zip, zip3 } from '../util.js'
-export * as value from './value.js'
-export * as assignmentTarget from './assignmentTarget.js'
+} from './helpers/typeAssertions';
+import { RuntimeError, SemanticError, FlowControlReturnError } from '../language/exceptions'
+import * as Position from '../language/Position'
+import * as Runtime from '../language/Runtime'
+import * as Value from '../language/Value'
+import * as values from '../language/values'
+import * as TypeState from '../language/TypeState'
+import * as RespState from '../language/RespState'
+import * as Type from '../language/Type'
+import * as types from '../language/types'
+import { PURITY, getPurityLevel } from '../language/constants'
+import { zip, zip3 } from '../util'
+export * as value from './value'
+export * as assignmentTarget from './assignmentTarget'
 
 type Node = Node.Node
 type AssignmentTargetNode = Node.AssignmentTargetNode
@@ -38,18 +38,20 @@ const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Toke
 
 interface RootOpts { module: Node }
 interface RootExecOpts { behaviors: Partial<Runtime.RuntimeBehaviors> }
+interface RootTypeCheckOpts { behaviors: Partial<TypeState.TypeStateBehaviors> }
 export const root = ({ module }: RootOpts) => ({
   exec: ({ behaviors }: RootExecOpts = { behaviors: {} }): AnyValue => {
     const rt = Runtime.create({ behaviors })
     return module.exec(rt)
   },
-  typeCheck: (): void => {
-    const state = TypeState.create()
+  typeCheck: ({ behaviors }: RootTypeCheckOpts = { behaviors: {} }): void => {
+    const state = TypeState.create({ behaviors })
     module.typeCheck(state)
   }
 })
 
 export const beginBlock = (pos: Position, content: Node) => Node.create({
+  name: 'beginBlock',
   pos,
   exec: rt => content.exec(rt),
   typeCheck: state => (
@@ -62,12 +64,17 @@ export const beginBlock = (pos: Position, content: Node) => Node.create({
 
 interface BlockOpts { content: Node }
 export const block = (pos: Position, { content }: BlockOpts) => Node.create({
+  name: 'block',
   pos,
   exec: rt => {
     content.exec(rt)
     return values.createUnit()
   },
-  typeCheck: state => {
+  typeCheck: outerState => {
+    let state = TypeState.update(outerState, {
+      scopes: [...outerState.scopes, new Map()],
+      definedTypes: [...outerState.definedTypes, new Map()],
+    })
     const { respState, type: contentType } = content.typeCheck(state)
     const type = types.isEffectivelyNever(contentType) ? types.createNever() : types.createUnit()
     return { respState, type }
@@ -75,6 +82,7 @@ export const block = (pos: Position, { content }: BlockOpts) => Node.create({
 })
 
 export const sequence = (statements: readonly Node[]) => Node.create({
+  name: 'sequence',
   exec: rt => {
     for (const statement of statements) statement.exec(rt)
     return null
@@ -88,6 +96,7 @@ export const sequence = (statements: readonly Node[]) => Node.create({
 })
 
 export const noop = () => Node.create({
+  name: 'noop',
   exec: rt => null,
   typeCheck: state => {
     const respState = RespState.create()
@@ -98,6 +107,7 @@ export const noop = () => Node.create({
 
 interface PrintOpts { r: Node }
 export const print = (pos: Position, { r }: PrintOpts) => Node.create({
+  name: 'print',
   pos,
   exec: rt => {
     const value = r.exec(rt)
@@ -107,8 +117,21 @@ export const print = (pos: Position, { r }: PrintOpts) => Node.create({
   typeCheck: state => r.typeCheck(state),
 })
 
+interface PrintTypeOpts { r: Node }
+export const printType = (pos: Position, { r }: PrintTypeOpts) => Node.create({
+  name: 'print',
+  pos,
+  exec: rt => r.exec(rt),
+  typeCheck: state => {
+    const { respState, type } = r.typeCheck(state)
+    state.behaviors.showDebugTypeOutput(type)
+    return { respState, type }
+  },
+})
+
 interface EqualsOpts { l: Node, r: Node }
 export const equals = (pos: Position, { l, r }: EqualsOpts) => Node.create({
+  name: 'equals',
   pos,
   exec: rt => values.createBoolean(l.exec(rt).raw === r.exec(rt).raw),
   typeCheck: state => {
@@ -122,6 +145,7 @@ export const equals = (pos: Position, { l, r }: EqualsOpts) => Node.create({
 
 interface NotEqualOpts { l: Node, r: Node }
 export const notEqual = (pos: Position, { l, r }: NotEqualOpts) => Node.create({
+  name: 'notEqual',
   pos,
   exec: rt => values.createBoolean(l.exec(rt).raw !== r.exec(rt).raw),
   typeCheck: state => {
@@ -135,6 +159,7 @@ export const notEqual = (pos: Position, { l, r }: NotEqualOpts) => Node.create({
 
 interface AddOpts { l: Node, r: Node }
 export const add = (pos: Position, { l, r }: AddOpts) => Node.create({
+  name: 'add',
   pos,
   exec: rt => values.createInt(
     assertBigInt(l.exec(rt).raw) +
@@ -151,6 +176,7 @@ export const add = (pos: Position, { l, r }: AddOpts) => Node.create({
 
 interface SubtractOpts { l: Node, r: Node }
 export const subtract = (pos: Position, { l, r }: SubtractOpts) => Node.create({
+  name: 'subtract',
   pos,
   exec: rt => values.createInt(assertBigInt(l.exec(rt).raw) - assertBigInt(r.exec(rt).raw)),
   typeCheck: state => {
@@ -164,6 +190,7 @@ export const subtract = (pos: Position, { l, r }: SubtractOpts) => Node.create({
 
 interface MultiplyOpts { l: Node, r: Node }
 export const multiply = (pos: Position, { l, r }: MultiplyOpts) => Node.create({
+  name: 'multiply',
   pos,
   exec: rt => values.createInt(assertBigInt(l.exec(rt).raw) * assertBigInt(r.exec(rt).raw)),
   typeCheck: state => {
@@ -177,6 +204,7 @@ export const multiply = (pos: Position, { l, r }: MultiplyOpts) => Node.create({
 
 interface PowerOpts { l: Node, r: Node }
 export const power = (pos: Position, { l, r }: PowerOpts) => Node.create({
+  name: 'power',
   pos,
   exec: rt => values.createInt(assertBigInt(l.exec(rt).raw) ** assertBigInt(r.exec(rt).raw)),
   typeCheck: state => {
@@ -190,6 +218,7 @@ export const power = (pos: Position, { l, r }: PowerOpts) => Node.create({
 
 interface PropertyAccessOpts { l: Node, identifier: string }
 export const propertyAccess = (pos: Position, { l, identifier }: PropertyAccessOpts) => Node.create({
+  name: 'propertyAccess',
   pos,
   exec: rt => {
     const nameToValue = assertRawRecordValue(l.exec(rt).raw)
@@ -209,6 +238,7 @@ interface TypeAssertionOpts { expr: Node, getType: TypeGetter, typePos: Position
 export const typeAssertion = (pos: Position, { expr, getType, typePos, operatorAndTypePos }: TypeAssertionOpts) => {
   let finalType: AnyType | null
   return Node.create({
+    name: 'typeAssertion',
     pos,
     exec: rt => {
       const value = expr.exec(rt)
@@ -232,6 +262,7 @@ export const typeAssertion = (pos: Position, { expr, getType, typePos, operatorA
 interface GenericParam { getType: TypeGetter, pos: Position }
 interface InvokeOpts { fnExpr: Node, genericParams: GenericParam[], args: Node[] }
 export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpts) => Node.createInvokeNode({
+  name: 'invoke',
   pos,
   data: {
     type: 'INVOKE',
@@ -320,6 +351,7 @@ export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpt
 
 interface CallWithPermissionsOpts { purity: ValueOf<typeof PURITY>, invokeExpr: InvokeNode }
 export const callWithPermissions = (pos: Position, { purity, invokeExpr }: CallWithPermissionsOpts) => Node.create({
+  name: 'callWithPermissions',
   pos,
   exec: rt => invokeExpr.exec(rt),
   typeCheck: state => {
@@ -332,6 +364,7 @@ export const callWithPermissions = (pos: Position, { purity, invokeExpr }: CallW
 
 interface ReturnOpts { value: Node }
 export const return_ = (pos: Position, { value }: ReturnOpts) => Node.create({
+  name: 'return',
   pos,
   exec: rt => {
     const returnValue = value.exec(rt)
@@ -347,6 +380,7 @@ export const return_ = (pos: Position, { value }: ReturnOpts) => Node.create({
 
 interface BranchOpts { condition: Node, ifSo: Node, ifNot: Node }
 export const branch = (pos: Position, { condition, ifSo, ifNot }: BranchOpts) => Node.create({
+  name: 'branch',
   pos,
   exec: rt => {
     const result = condition.exec(rt)
@@ -365,6 +399,7 @@ export const branch = (pos: Position, { condition, ifSo, ifNot }: BranchOpts) =>
 
 interface MatchOpts { matchValue: Node, matchArms: { pattern: AssignmentTargetNode, body: Node }[] }
 export const match = (pos: Position, { matchValue, matchArms }: MatchOpts) => Node.create({
+  name: 'match',
   pos,
   exec: rt => {
     const value = matchValue.exec(rt)
@@ -398,6 +433,7 @@ export const match = (pos: Position, { matchValue, matchArms }: MatchOpts) => No
 
 interface IdentifierOpts { identifier: string }
 export const identifier = (pos: Position, { identifier }: IdentifierOpts) => Node.create({
+  name: 'identifier',
   pos,
   exec: rt => {
     const foundVar = Runtime.lookupVar(rt, identifier)
@@ -415,6 +451,7 @@ export const identifier = (pos: Position, { identifier }: IdentifierOpts) => Nod
 
 interface TypeAlias { name: string, getType: TypeGetter, definedWithin: Node, typePos: Position }
 export const typeAlias = (pos: Position, { name, getType, definedWithin, typePos }: TypeAlias) => Node.create({
+  name: 'typeAlias',
   pos,
   exec: rt => definedWithin.exec(rt),
   typeCheck: state => {
@@ -433,8 +470,9 @@ export const typeAlias = (pos: Position, { name, getType, definedWithin, typePos
 // }),
 
 interface IndividualDeclaration { expr: Node, assignmentTarget: AssignmentTargetNode, assignmentTargetPos: Position }
-interface DeclarationOpts { declarations: IndividualDeclaration[], expr: Node }
-export const declaration = (pos: Position, { declarations, expr }: DeclarationOpts) => Node.create({
+interface DeclarationOpts { declarations: IndividualDeclaration[], expr: Node, newScope: boolean }
+export const declaration = (pos: Position, { declarations, expr, newScope = false }: DeclarationOpts) => Node.create({
+  name: 'declaration',
   pos,
   exec: rt => {
     for (const decl of declarations) {
@@ -446,7 +484,14 @@ export const declaration = (pos: Position, { declarations, expr }: DeclarationOp
     }
     return expr.exec(rt)
   },
-  typeCheck: state => {
+  typeCheck: outerState => {
+    let state = newScope
+      ? TypeState.update(outerState, {
+        scopes: [...outerState.scopes, new Map()],
+        definedTypes: [...outerState.definedTypes, new Map()],
+      })
+      : outerState
+
     const respStates = []
     for (const decl of declarations) {
       const { respState, type } = decl.expr.typeCheck(state)
