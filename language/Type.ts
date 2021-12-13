@@ -236,8 +236,13 @@ export function assertTypeAssignableTo(type: AnyType, expectedType: AnyType, pos
   }
 }
 
-export function getWiderType(type1: AnyType, type2: AnyType, errMessage: string, errPos: Position): AnyType {
-  if (isTypeAssignableTo(type2, type1)) return type1
-  else if (isTypeAssignableTo(type1, type2)) return type2
-  else throw new SemanticError(errMessage, errPos)
+// e.g. #{} is wider than #{ x #int }, because it accepts more as an assignment target.
+export function getWiderType(types: AnyType[], errMessage: string, errPos: Position): AnyType {
+  for (const type of types) {
+    if (types.every(checkType => isTypeAssignableTo(checkType, type))) {
+      return type
+    }
+  }
+
+  throw new SemanticError(errMessage, errPos)
 }

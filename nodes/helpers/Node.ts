@@ -1,9 +1,12 @@
-import * as Position from '../../language/Position'
-import * as Runtime from '../../language/Runtime'
-import * as Value from '../../language/Value'
-import * as TypeState from '../../language/TypeState'
-import * as RespState from '../../language/RespState'
-import * as Type from '../../language/Type'
+import type * as Position from '../../language/Position'
+import type * as Runtime from '../../language/Runtime'
+import type * as Value from '../../language/Value'
+import type * as TypeState from '../../language/TypeState'
+import type * as RespState from '../../language/RespState'
+import type * as RtRespState from '../../language/RtRespState'
+import type * as Type from '../../language/Type'
+import type * as types from '../../language/types'
+import type * as values from '../../language/values'
 import { PURITY } from '../../language/constants'
 
 type ValueOf<T> = T[keyof T]
@@ -12,15 +15,32 @@ export interface Node {
   readonly name: string
   readonly pos?: Position.Position
   readonly data?: unknown
-  readonly exec: (rt: Runtime.Runtime) => Value.AnyValue
+  readonly exec: (rt: Runtime.Runtime) => { rtRespState: RtRespState.RtRespState, value: Value.AnyValue }
   readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
+}
+
+interface RootExecOpts {
+  readonly behaviors: Partial<Runtime.RuntimeBehaviors>
+  readonly moduleDefinitions: Map<string, Root>
+  readonly cachedModules?: { mutable: Map<string, values.RecordValue> }
+}
+interface RootTypeCheckOpts {
+  readonly behaviors: Partial<TypeState.TypeStateBehaviors>
+  readonly moduleDefinitions: Map<string, Root>
+  readonly moduleShapes?: { readonly mutable: Map<string, types.RecordType> }
+  readonly importStack?: readonly string[]
+}
+export interface Root {
+  readonly dependencies: readonly string[]
+  readonly exec: (opts: RootExecOpts) => values.RecordValue
+  readonly typeCheck: (opts: RootTypeCheckOpts) => types.RecordType
 }
 
 interface NodeOpts<T> {
   readonly name: string
   readonly pos?: Position.Position
   readonly data?: unknown
-  readonly exec: (rt: Runtime.Runtime, { typeCheckContext }: { typeCheckContext: T }) => Value.AnyValue
+  readonly exec: (rt: Runtime.Runtime, { typeCheckContext }: { typeCheckContext: T }) => { rtRespState: RtRespState.RtRespState, value: Value.AnyValue }
   readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType, typeCheckContext?: T }
 }
 
@@ -34,7 +54,7 @@ export const missingType = Symbol('Missing Type')
 
 interface AssignmentTargetNodeExecOpts { incomingValue: Value.AnyValue, allowFailure?: boolean }
 type AssignmentTargetNodeExecReturnType = { identifier: string, value: Value.AnyValue }[]
-interface AssignmentTargetNodeTypeCheckOpts { incomingType: Type.AnyType | typeof missingType, allowWidening?: boolean }
+interface AssignmentTargetNodeTypeCheckOpts { incomingType: Type.AnyType | typeof missingType, allowWidening?: boolean, export: boolean }
 interface AssignmentTargetNodeTypeCheckReturnType { respState: RespState.RespState }
 export interface AssignmentTargetNode {
   readonly name: string

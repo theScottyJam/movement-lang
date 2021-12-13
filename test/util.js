@@ -1,10 +1,11 @@
 import { testRun } from '../parser'
 import { BaseParseTimeError } from '../language/exceptions'
 
-export const customTestRun = text => {
+export const customTestRun = (text, ...args) => {
   try {
-    return testRun(text)
+    return testRun(text, ...args)
   } catch (err) {
+    if (err.message.includes('Unexpected end-of-file')) throw err
     if (!(err instanceof BaseParseTimeError)) throw err
     const { message, pos } = err
     const lines = text.split('\n').slice(pos.first_line - 1, pos.last_line)

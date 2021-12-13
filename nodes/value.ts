@@ -1,8 +1,9 @@
 import * as Node from './helpers/Node';
 import { assertNotNullish } from './helpers/typeAssertions';
-import { BadSyntaxError, SemanticError } from '../language/exceptions'
+import { BadSyntaxError } from '../language/exceptions'
 import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
+import * as RtRespState from '../language/RtRespState'
 import * as values from '../language/values'
 import * as TypeState from '../language/TypeState'
 import * as RespState from '../language/RespState'
@@ -26,7 +27,7 @@ interface IntOpts { value: bigint }
 export const int = (pos: Position, { value }: IntOpts) => Node.create({
   name: 'int',
   pos,
-  exec: rt => values.createInt(value),
+  exec: rt => ({ rtRespState: RtRespState.create(), value: values.createInt(value) }),
   typeCheck: state => ({ respState: RespState.create(), type: types.createInt() }),
 })
 
@@ -62,7 +63,8 @@ export const string = (pos: Position, { uninterpretedValue }: StringOpts) => {
   return Node.create({
     name: 'string',
     pos,
-    exec: rt => values.createString(value),
+    data: { value },
+    exec: rt => ({ rtRespState: RtRespState.create(), value: values.createString(value) }),
     typeCheck: state => ({ respState: RespState.create(), type: types.createString() }),
   })
 }
@@ -71,7 +73,7 @@ interface BooleanOpts { value: boolean }
 export const boolean = (pos: Position, { value }: BooleanOpts) => Node.create({
   name: 'boolean',
   pos,
-  exec: rt => values.createBoolean(value),
+  exec: rt => ({ rtRespState: RtRespState.create(), value: values.createBoolean(value) }),
   typeCheck: state => ({ respState: RespState.create(), type: types.createBoolean() }),
 })
 
@@ -84,10 +86,17 @@ export const record = (pos: Position, { content }: RecordOpts) => {
     pos,
     exec: rt => {
       const nameToValue = new Map()
+      const rtRespStates = []
       for (const [name, { target }] of content) {
-        nameToValue.set(name, target.exec(rt))
+        const { rtRespState, value } = target.exec(rt)
+        rtRespStates.push(rtRespState)
+        nameToValue.set(name, value)
       }
-      return values.createRecord(nameToValue, assertNotNullish(finalType))
+
+      return {
+        rtRespState: RtRespState.merge(...rtRespStates),
+        value: values.createRecord(nameToValue, assertNotNullish(finalType))
+      }
     },
     typeCheck: state => {
       const nameToType = new Map<string, AnyType>()
@@ -124,21 +133,28 @@ interface FunctionTypeContext { finalType: types.FunctionType, capturedStates: r
 export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionOpts) => Node.create<FunctionTypeContext>({
   name: 'function',
   pos,
-  exec: (rt, { typeCheckContext: { finalType, capturedStates } }) => values.createFunction(
-    {
-      params,
-      body,
-      capturedScope: capturedStates.map(identifier => ({ identifier, value: Runtime.lookupVar(rt, identifier) })),
-    },
-    assertNotNullish(finalType),
-  ),
+  exec: (rt, { typeCheckContext: { finalType, capturedStates } }) => ({
+    rtRespState: RtRespState.create(),
+    value: values.createFunction(
+      {
+        params,
+        body,
+        capturedScope: capturedStates.map(identifier => ({ identifier, value: Runtime.lookupVar(rt, identifier) })),
+      },
+      assertNotNullish(finalType),
+    )
+  }),
   typeCheck: outerState => {
     let state = TypeState.create({
-      scopes: [...outerState.scopes, new Map()],
+      scopes: [...outerState.scopes, { forFn: Symbol(), typeLookup: new Map() }],
       definedTypes: [...outerState.definedTypes, new Map()],
       minPurity: purity,
       isBeginBlock: false,
       behaviors: outerState.behaviors,
+      isMainModule: outerState.isMainModule,
+      moduleDefinitions: outerState.moduleDefinitions,
+      moduleShapes: outerState.moduleShapes,
+      importStack: outerState.importStack,
     })
 
     // Adding generic params to type scope
@@ -169,7 +185,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
     // Getting declared body type
     const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
     if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can returns type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
-    const capturedStates = bodyRespState.outerScopeVars
+    const capturedStates = bodyRespState.outerFnVars
 
     // Checking if calculated return types line up with declared body type
     if (requiredBodyType) {
@@ -178,12 +194,14 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       }
     }
 
-    // Finding widest calculated return type
-    const returnType = requiredBodyType ?? bodyRespState.returnTypes.reduce((curType, returnType) => {
-      if (Type.isTypeAssignableTo(curType, returnType.type)) return curType
-      if (Type.isTypeAssignableTo(returnType.type, curType)) return returnType.type
-      throw new SemanticError(`This return has the type "${Type.repr(returnType.type)}", which is incompatible with another possible return types from this function, "${Type.repr(curType)}".`, returnType.pos)
-    }, bodyType)
+    // Finding widest return type
+    const allReturnTypes = [...bodyRespState.returnTypes.map(typeInfo => typeInfo.type), bodyType]
+      .filter(type => !types.isEffectivelyNever(type))
+    const returnType = requiredBodyType ?? (
+      allReturnTypes.length === 0 // true when all paths lead to #never (and got filtered out)
+        ? types.createNever()
+        : Type.getWiderType(allReturnTypes, 'Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation.', pos)
+    )
 
     const finalType = types.createFunction({
       paramTypes,
@@ -193,9 +211,9 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
     })
 
     const finalRespState = RespState.merge(...respStates, bodyRespState)
-    const newOuterScopeVars = finalRespState.outerScopeVars.filter(ident => TypeState.lookupVar(outerState, ident).fromOuterScope)
+    const newOuterScopeVars = finalRespState.outerFnVars.filter(ident => TypeState.lookupVar(outerState, ident).fromOuterFn)
     return {
-      respState: RespState.update(finalRespState, { outerScopeVars: newOuterScopeVars }),
+      respState: RespState.update(finalRespState, { outerFnVars: newOuterScopeVars }),
       type: finalType,
       typeCheckContext: { finalType, capturedStates }
     }

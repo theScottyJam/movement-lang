@@ -242,14 +242,26 @@ test('Unable to access variables outside of function scope', () => {
 test('Able to close over variables', () => {
   expect(customTestRun('let fn = let x = 2 in () => x; print fn()')[0].raw).toBe(2n)
   const results = customTestRun(`
-    let makeFn = (x #int) => () => x
-    let fn2 = makeFn(2)
-    let fn3 = makeFn(3)
-    print fn2()
-    print fn3()
+    let x = 10 // Should not get used
+    function makeFn(x #int) {
+      let y = x + 1
+      let notClosedOver = y * 2
+      {
+        let z = y + 1
+        let alsoNotClosedOver = z * 2
+        return () => x + y + z
+      }
+      return () => 0 // Won't execute
+    }
+    begin {
+      let fn2 = run makeFn(2)
+      let fn3 = run makeFn(3)
+      print fn2()
+      print fn3()
+    }
   `)
-  expect(results[0].raw).toBe(2n)
-  expect(results[1].raw).toBe(3n)
+  expect(results[0].raw).toBe(9n)
+  expect(results[1].raw).toBe(12n)
 })
 
 //
@@ -313,24 +325,34 @@ test('Calling with correct purity annotations depends on current type, not under
     .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get"')
 })
 
-xtest('Each return must provide compatible types.', () => {
-  // TODO: These tests need to be updated. They're not supposed to result in functions that return #never.
-  expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3 } } }; _printType fn')[0]).toBe('#function() #never')
-  expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3, y: 2 } } }; _printType fn')[0]).toBe('#function() #never')
-  expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { y: 2 } } }; _printType fn')[0]).toBe('#function() #never')
+it('Each return must provide compatible types.', () => {
+  expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
+  expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3, y: 2 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
+  expect(customTestRun('function fn() {}; _printType fn')[0]).toBe('#function() #unit')
+  // Handling never types
+  expect(customTestRun('function fn(cb #()=>#never) { return cb() }; _printType fn')[0]).toBe('#function(#() => #never) #never')
+  expect(customTestRun('function fn(cb #function()#never) { run cb() }; _printType fn')[0]).toBe('#function(#function() #never) #never')
 
-  expect(customTestRun("function fn() { if true { return { x: 2 } } else { return { x: 'string' } } }; _printType fn")[0]).toBe('#function() #never')
-  expect(customTestRun("function fn() { if true { return 2 } else { return 'string' } }; _printType fn")[0]).toBe('#function() #never')
+  expect(() => customTestRun('function fn() { if true { return { x: 2 } } else { return { y: 2 } } }; _printType fn'))
+    .toThrow('Failed to find a common type among the possible return types of this function.')
+  expect(() => customTestRun("function fn() { if true { return { x: 2 } } else { return { x: 'string' } } }; _printType fn"))
+    .toThrow('Failed to find a common type among the possible return types of this function.')
+  expect(() => customTestRun("function fn() { if true { return 2 } else { return 'string' } }; _printType fn")[0])
+    .toThrow('Failed to find a common type among the possible return types of this function.')
   
-  // Other things to test:
-  // * three returns
-  // * zero returns (means unit is returned)
-  // * Automatically determines never types if error is thrown or what-not.
+  // Three returns
+  expect(() => customTestRun('function fn() { if true { return { x: 2 } } else if true { return { y: 2 } } else { return { x: 3, y: 3 } } }; _printType fn'))
+    .toThrow('Failed to find a common type among the possible return types of this function.')
+  expect(customTestRun('function fn(cb #()=>#never) { if true { return cb() } else { return { x: 2 } } }; _printType fn')[0]).toBe('#function(#() => #never) #{ x #int }')
+  expect(() => customTestRun('function fn(cb #()=>#never) { if true { return cb() } else if true { return { x: 2 } } else { return { y: 2 } } }; _printType fn'))
+    .toThrow('Failed to find a common type among the possible return types of this function.')
+  expect(customTestRun('function fn() { if true { return { x: 2 } } else if true { return { x: 2, y: 2 } } else { return { x: 2, z: 3 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
+  expect(customTestRun('function fn() { if true { return { x: 2, z: 3 } } else if true { return { x: 2, y: 2 } } else { return { x: 2 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
 })
 
 test('Assignment can not be used to widen types', () => {
   expect(() => customTestRun('let x #{ x #int } = { x: 2 } as #{}'))
-    .toThrow('Found type "#{}", but expected type "#{ x #int }". -- let x #{ x #int } = { x: 2 } as #{}')
+    .toThrow('Found type "#{}", but expected type "#{ x #int }".')
 })
 
 test('"as" operator', () => {
@@ -358,8 +380,94 @@ test('Both arms of expression-if must return compatible types', () => {
   expect(customTestRun('type alias #MyRec = #{ z #int }; print if true then { x: 2, z: 0 } as #MyRec else { y: 2, z: 1 } as #MyRec'))
 })
 
+//
+// Imports
+//
+
+test('Able to import other modules', () => {
+  expect(customTestRun("import other from './other'; print other.fn()", {
+    modules: { 'other': 'export let fn = () => 2' }
+  })[0].raw).toBe(2n)
+  expect(customTestRun("import other from './other'; begin { print other.x + run other.fn() }", {
+    modules: { 'other': 'export function fn() { return 2 }; export let x = 3' }
+  })[0].raw).toBe(5n)
+  expect(customTestRun("import mod1 from './dir/mod1'; print mod1.fn()", {
+    modules: {
+      'dir/mod1': "import mod2 from './mod2'; export let fn = mod2.fn",
+      'dir/mod2': "export let fn = () => 2",
+    }
+  })[0].raw).toBe(2n)
+  expect(customTestRun("import $ from './other'; print 2", {
+    modules: { 'other': 'let x = 3' }
+  })[0].raw).toBe(2n)
+  expect(() => customTestRun("import $ from './other'", {
+    modules: { 'other': 'function fn() { export let x = 2 }' }
+  })).toThrow('Syntax error')
+})
+
+test('Exports work with destructuring', () => {
+  expect(customTestRun("import other from './other'; begin { print other.x + other.y }", {
+    modules: { 'other': 'export let { a: x, b: y where y == 3 } = { a: 2, b: 3 }' }
+  })[0].raw).toBe(5n)
+})
+
+test('Imported modules are cached', () => {
+  expect(customTestRun("import $ from './mod1'; import $ from './mod2'", {
+    modules: {
+      'mod1': "import mod2 from './mod2'",
+      'mod2': "print 5",
+    }
+  }).length).toBe(1)
+})
+
+test('Circular dependencies are not allowed', () => {
+  expect(() => customTestRun("import $ from './mod1'", {
+    modules: {
+      'mod1': "import $ from './mod2'",
+      'mod2': "import $ from './mod1'",
+    }
+  })).toThrow('Circular dependency detected')
+})
+
+test('Can not use export in the main module', () => {
+  expect(() => customTestRun("export let x = 2"))
+    .toThrow('Can not export from a main module')
+})
+
+test('Can not use a begin block in an imported module', () => {
+  expect(() => customTestRun("import $ from './other'", {
+    modules: { 'other': 'begin { print 2 }' }
+  })).toThrow('Can not use a begin block in an imported module')
+})
+
+//
+// etc
+//
+
+test('Able to have odd spacing', () => {
+  expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
+  expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
+  expect(customTestRun(' let x = 2 begin { print 0 print x } ')[1].raw).toBe(2n)
+  expect(customTestRun(' print 2 ')[0].raw).toBe(2n)
+  expect(customTestRun('').length).toBe(0)
+  expect(customTestRun(' ').length).toBe(0)
+  expect(customTestRun(" import other from './other' print other.x ", {
+    modules: { 'other': 'export let x = 2' }
+  })[0].raw).toBe(2n)
+  expect(customTestRun(" import other from './other' begin { print other.x } ", {
+    modules: { 'other': 'export let x = 2' }
+  })[0].raw).toBe(2n)
+  expect(customTestRun(" import other from './other' let y = other.x + 1 begin { print y } ", {
+    modules: { 'other': 'export let x = 2' }
+  })[0].raw).toBe(3n)
+  expect(customTestRun(" import other from './other' ", {
+    modules: { 'other': 'print 2' }
+  })[0].raw).toBe(2n)
+})
+
 /* OTHER TESTS
 # generics
 # unknown and never - e.g. addition with unknown types.
 # pattern match
+# I should make a special print function (like _printType), that prints out captured variables, for testing purposes
 */

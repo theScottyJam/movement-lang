@@ -39,7 +39,7 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
       }
       return [{ identifier, value: incomingValue }]
     },
-    typeCheck: (state, { incomingType, allowWidening = false }) => {
+    typeCheck: (state, { incomingType, allowWidening = false, export: export_ = false }) => {
       typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
       if (incomingType === Node.missingType && !typeConstraint) throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
       if (typeConstraint && incomingType !== Node.missingType && !Type.isTypeAssignableTo(incomingType, typeConstraint)) {
@@ -52,7 +52,12 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
       const finalType = typeConstraint ? typeConstraint : incomingType
       if (finalType === Node.missingType) throw new Error('INTERNAL ERROR')
       return {
-        respState: RespState.create({ declarations: [{ identifier, type: finalType, identPos }] }),
+        respState: RespState.create({
+          declarations: [{ identifier, type: finalType, identPos }],
+          moduleShape: export_
+            ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
+            : types.createRecord({ nameToType: new Map() }),
+        }),
       }
     },
     contextlessTypeCheck: state => {
@@ -85,7 +90,7 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
     }
     return allBindings
   },
-  typeCheck: (state, { incomingType, allowWidening = false }) => {
+  typeCheck: (state, { incomingType, allowWidening = false, export: export_ = false }) => {
     if (incomingType !== Node.missingType) Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
     const respStates = []
     for (const [identifier, assignmentTarget] of entries) {
@@ -97,7 +102,7 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
         if (incomingType === Node.missingType) throw new Error('INTERNAL ERROR')
         throw new SemanticError(`Unable to destructure property ${identifier} from type ${Type.repr(incomingType)}`, DUMMY_POS)
       }
-      const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType, allowWidening })
+      const { respState } = assignmentTarget.typeCheck(state, { incomingType: valueType, allowWidening, export: export_ })
       respStates.push(respState)
       state = TypeState.applyDeclarations(state, respState)
     }
@@ -130,14 +135,14 @@ export const valueConstraint = (pos: Position, { assignmentTarget, constraint }:
     if (!bindings) return null
     rt = Runtime.update(rt, { scopes: [...rt.scopes, ...bindings] })
     const success = constraint.exec(rt)
-    if (!success.raw) {
+    if (!success.value.raw) {
       if (allowFailure) return null
       throw new RuntimeError('Value Constraint failed.', { testCode: 'failedValueConstraint' })
     }
     return bindings
   },
-  typeCheck: (state, { incomingType, allowWidening = false }) => {
-    const { respState } = assignmentTarget.typeCheck(state, { incomingType, allowWidening })
+  typeCheck: (state, { incomingType, allowWidening = false, export: export_ = false }) => {
+    const { respState } = assignmentTarget.typeCheck(state, { incomingType, allowWidening, export: export_ })
     state = TypeState.applyDeclarations(state, respState)
     const { respState: respState2, type } = constraint.typeCheck(state)
     Type.assertTypeAssignableTo(type, types.createBoolean(), DUMMY_POS)

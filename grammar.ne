@@ -33,11 +33,12 @@
   const lexer = moo.states({
     main: {
       'comment': /\/\/.*/,
+      'multilineComment': { match: /\/\*[^]*?\*\//, lineBreaks: true },
       'whitespace': /[ \t]+/,
-      'newLine': {match: '\n', lineBreaks: true},
+      'newLine':  { match: '\n', lineBreaks: true },
 
       'boolean': ['true', 'false'],
-      'stringStart': {match: "'", push: 'string'},
+      'stringStart': { match: "'", push: 'string' },
 
       '+': '+',
       '-': '-',
@@ -101,10 +102,14 @@
       'where': 'where',
       'tag': 'tag',
       'variant': 'variant',
+      'export': 'export',
+      'import': 'import',
+      'from': 'from',
 
       'upperIdentifier': /[A-Z][a-zA-Z0-9]*_*/,
       'nonUpperIdentifier': /[a-z][a-zA-Z0-9]*_*|[0-9][a-zA-Z0-9]*_+/,
       '$': '$',
+      'builtinIdentifier': /\$[a-zA-Z0-9]*_*|\$[0-9][a-zA-Z0-9]*_+/,
       'number': /\d+/,
       '#gets': '#gets',
       '#function': '#function',
@@ -143,19 +148,48 @@ nonEmptyDeliminated[PATTERN, DELIMITER, TRAILING_DELIMITER]
   %}
 
 root
-  -> _ module _ {%
+  -> _ module {%
     ([, module, ]) => nodes.root({ module })
   %}
 
 module
-  -> deliminated[moduleLevelStatement ";":?, _, ignore] (_ %begin _ block):? {%
-    ([statementEntries, beginBlockEntry]) => {
-      const [,,, beginBlock] = beginBlockEntry ?? [,,, null]
+  -> deliminated[importStatement ";":?, _, _] deliminated[moduleLevelStatement ";":?, _, _] (%begin _ block _):? {%
+    ([importEntries, statementEntries, beginBlockEntry]) => {
+      const [,, beginBlock] = beginBlockEntry ?? [,,, null]
+      const makeImportNodes = importEntries.map(x => x[0]).flat()
       const statements = statementEntries.map(x => x[0]).flat()
-      return [...statements].reverse().reduce((previousNode, makeNode) => (
+      const rootNodeWithoutImports = statements.reverse().reduce((previousNode, makeNode) => (
         makeNode(previousNode)
       ), beginBlock ? nodes.beginBlock(DUMMY_POS, beginBlock) : nodes.noop())
+      const { imports, previousNode: rootNode } =
+        makeImportNodes.reverse().reduce(({ imports, previousNode }, makeNode) => {
+          const newNode = makeNode(previousNode)
+          return { imports: [...imports, newNode.data.dependency], previousNode: newNode }
+        }, { imports: [], previousNode: rootNodeWithoutImports })
+      return nodes.module(DUMMY_POS, {
+        content: rootNode,
+        dependencies: imports,
+      })
     }
+  %}
+
+importStatement
+  -> "import" _ assignmentTarget _ "from" _ stringLiteral {%
+    ([,, assignmentTarget,, ,, stringLiteral]) => nextNode => (
+      nodes.importMeta(DUMMY_POS, {
+        from: stringLiteral.data.value,
+        childNode: nodes.declaration(DUMMY_POS, {
+          declarations: [{
+            assignmentTarget,
+            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.data.value }),
+            assignmentTargetPos: DUMMY_POS
+          }],
+          expr: nextNode,
+          newScope: false,
+          export: false,
+        }),
+      })
+    )
   %}
 
 block
@@ -167,6 +201,47 @@ block
       ), nodes.noop())
       return nodes.block(range(start, end), { content })
     }
+  %}
+
+blockAndModuleLevelStatement[ALLOW_EXPORT]
+  -> ("export" _ $ALLOW_EXPORT):? "let" _ assignmentTarget _ "=" _ expr10 {%
+    ([export_, let_,, assignmentTarget,, ,, expr]) => nextNode => (
+      nodes.declaration(range(let_, expr.pos), {
+        declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
+        expr: nextNode,
+        newScope: false,
+        export: !!export_,
+      })
+    )
+  %} | "print" _ expr10 {%
+    ([print,, r]) => nextNode => nodes.sequence([
+      nodes.print(range(print, r.pos), { r }),
+      nextNode,
+    ])
+  %} | "_printType" _ expr10 {%
+    ([print,, r]) => nextNode => nodes.sequence([
+      nodes.printType(range(print, r.pos), { r }),
+      nextNode,
+    ])
+  %} | ("export" _ $ALLOW_EXPORT):? "function" _ userValueIdentifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
+    ([export_, function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
+      const [genericParamDefList] = genericDefListEntry ?? [[]]
+      const [getBodyType] = getBodyTypeEntry ?? [null]
+      const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
+      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
+      return nextNode => nodes.declaration(DUMMY_POS, {
+        declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
+        expr: nextNode,
+        newScope: false,
+        export: !!export_,
+      })
+    }
+  %} | ("export" _):? "type" _ "alias" _ %userType _ "=" _ type {%
+    ([export_, ,, ,, nameToken,, ,, getType]) => (
+      !!export_
+        ? nextNode => { throw new Error('Not implemented') }
+        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, getType, definedWithin: nextNode, typePos: DUMMY_POS })
+    )
   %}
 
 statement
@@ -193,42 +268,15 @@ statement
         nextNode
       ])
     }
-  %} | moduleLevelStatement {% id %}
+  %} | block {%
+    ([block]) => nextNode => nodes.sequence([
+      block,
+      nextNode
+    ])
+  %} | blockAndModuleLevelStatement[%impossible] {% id %}
 
 moduleLevelStatement
-  -> "let" _ assignmentTarget _ "=" _ expr10 {%
-    ([let_,, assignmentTarget,, ,, expr]) => (
-      nextNode => nodes.declaration(range(let_, expr.pos), {
-        declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
-        expr: nextNode,
-      })
-    )
-  %} | "print" _ expr10 {%
-    ([print,, r]) => nextNode => nodes.sequence([
-      nodes.print(range(print, r.pos), { r }),
-      nextNode,
-    ])
-  %} | "_printType" _ expr10 {%
-    ([print,, r]) => nextNode => nodes.sequence([
-      nodes.printType(range(print, r.pos), { r }),
-      nextNode,
-    ])
-  %} | "function" _ identifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
-    ([function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
-      const [genericParamDefList] = genericDefListEntry ?? [[]]
-      const [getBodyType] = getBodyTypeEntry ?? [null]
-      const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
-      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
-      return nextNode => nodes.declaration(DUMMY_POS, {
-        declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
-        expr: nextNode
-      })
-    }
-  %} | "type" _ "alias" _ %userType _ "=" _ type {%
-    ([,, ,, nameToken,, ,, getType]) => (
-      nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, getType, definedWithin: nextNode, typePos: DUMMY_POS })
-    )
-  %}
+  -> blockAndModuleLevelStatement[ignore] {% id %}
 
 expr10
   -> "print" _ expr10 {%
@@ -304,7 +352,7 @@ expr80
     %}
 
 expr90
-  -> expr90 _ "." _ identifier {%
+  -> expr90 _ "." _ userValueIdentifier {%
     ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
   %} | expr100 {% id %}
 
@@ -314,10 +362,12 @@ expr100
   %} | %boolean {%
     ([token]) => nodes.value.boolean(asPos(token), { value: token.value === 'true' })
   %} | identifier {%
-    ([token]) => nodes.identifier(asPos(token), { identifier: token.value })
-  %} | %stringStart %stringContent:? %stringEnd {%
-    ([start, contentEntry, end]) => nodes.value.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
-  %} | "{" _ deliminated[identifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
+    ([token]) => token.value[0] === '$' && token.length > 1
+      ? nodes.builtinIdentifier(asPos(token), { identifier: token.value })
+      : nodes.identifier(asPos(token), { identifier: token.value })
+  %} | stringLiteral {%
+    id
+  %} | "{" _ deliminated[userValueIdentifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     ([,, entries, ]) => {
       const content = new Map()
       for (const [identifier, typeEntry,, ,, target] of entries) {
@@ -343,6 +393,11 @@ expr100
 #     }
 #   %}
 
+stringLiteral
+  -> %stringStart %stringContent:? %stringEnd {%
+    ([start, contentEntry, end]) => nodes.value.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
+  %}
+
 assignmentTarget -> pattern10 {% id %}
 
 pattern10
@@ -356,7 +411,7 @@ pattern20
   %} | pattern30 {% id %}
 
 pattern30
-  -> identifier (_ type):? {%
+  -> userValueIdentifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
       return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
@@ -407,7 +462,7 @@ type
       else if (token.value === '#unknown') return () => types.createUnknown()
       else throw new SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
     }
-  %} | "#" "{" _ deliminated[identifier _ type _, "," _, ("," _):?] "}" {%
+  %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
     ([, ,, entries, ]) => {
       const content = new Map()
       for (const [identifierToken,, getType] of entries) {
@@ -452,11 +507,17 @@ genericParamDefList
     )
   %}
 
-identifier
+userValueIdentifier
   -> %upperIdentifier {% id %}
   | %nonUpperIdentifier {% id %}
   | "$" {% id %}
 
+identifier
+  -> %upperIdentifier {% id %}
+  | %nonUpperIdentifier {% id %}
+  | %builtinIdentifier {% id %}
+  | "$" {% id %}
+
 ignore -> %impossible:? {% () => null %}
 
-_ -> (%whitespace | %comment | %newLine):* {% () => null %}
+_ -> (%whitespace | %comment | %multilineComment | %newLine):* {% () => null %}

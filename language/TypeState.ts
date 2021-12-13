@@ -1,6 +1,9 @@
+import fs from 'fs'
 import type { Position } from './Position'
 import type { RespState } from './RespState'
 import * as Type from './Type'
+import type * as types from './types'
+import type * as Node from '../nodes/helpers/Node' // TODO: I probably should not be reaching over here. (Maybe I can parameterize TypeState instead, with a generic parameter)
 import { SemanticError } from './exceptions'
 import { PURITY } from './constants'
 
@@ -15,7 +18,13 @@ export interface TypeState {
   readonly behaviors: Partial<TypeStateBehaviors>
   // The types of specific values in different scopes.
   // e.g. let x = 2 adds an entry for "x" in the current scope.
-  readonly scopes: readonly Map<string, Type.AnyType>[]
+  readonly scopes: {
+    // A symbol that uniquely identifies which function you're in (if you're in one)
+    // i.e. a subscope within a function would have the same symbol as the function itself.
+    // Used for deciding which variables need to be captured from outer scopes.
+    readonly forFn: symbol
+    readonly typeLookup: Map<string, Type.AnyType>
+  }[]
   // Types that have been defined in different scopes.
   // e.g. type alias x = number adds an entry for "x" in the current definedType scope.
   readonly definedTypes: readonly Map<string, createTypeFn>[]
@@ -24,7 +33,18 @@ export interface TypeState {
   readonly minPurity: purityTypes
   // true if currently within a beginBlock
   readonly isBeginBlock: boolean
+  // true if this is the first-loaded module
+  readonly isMainModule: boolean
+  // Map of paths to loaded modules. This value won't change from its initial value.
+  readonly moduleDefinitions: Map<string, Node.Root>
+  // Map of paths to module shapes
+  readonly moduleShapes: { readonly mutable: Map<string, types.RecordType> }
+  // List of modules that are currently being looked at, where the first is the main module.
+  // Used to find circular dependencies.
+  readonly importStack: readonly string[]
 }
+
+const required = () => { throw new Error('Missing required param') }
 
 function defaultShowDebugTypeOutputFn(value: Type.AnyType) {
   console.info(Type.repr(value))
@@ -35,20 +55,28 @@ const top = <T>(array: readonly T[]): T => array[array.length - 1]
 export function create(opts: Partial<TypeState> = {}): TypeState {
   const {
     behaviors = { showDebugTypeOutput: null },
-    scopes = [new Map()],
+    scopes = [{ forFn: Symbol(), typeLookup: new Map() }],
     definedTypes = [new Map()],
     minPurity = PURITY.pure,
     isBeginBlock = false,
+    isMainModule = required(),
+    moduleDefinitions = required(),
+    moduleShapes = { mutable: new Map() },
+    importStack = [],
   } = opts
 
   return {
     behaviors: {
-      showDebugTypeOutput: behaviors.showDebugTypeOutput ?? defaultShowDebugTypeOutputFn
+      showDebugTypeOutput: behaviors.showDebugTypeOutput ?? defaultShowDebugTypeOutputFn,
     },
     scopes,
     definedTypes,
     minPurity,
     isBeginBlock,
+    isMainModule,
+    moduleDefinitions,
+    moduleShapes,
+    importStack,
   }
 }
 
@@ -59,19 +87,25 @@ export function update(typeState: TypeState, opts: Partial<TypeState>): TypeStat
     definedTypes: opts.definedTypes ?? typeState.definedTypes,
     minPurity: opts.minPurity ?? typeState.minPurity,
     isBeginBlock: opts.isBeginBlock ?? typeState.isBeginBlock,
+    isMainModule: opts.isMainModule ?? typeState.isMainModule,
+    moduleDefinitions: opts.moduleDefinitions ?? typeState.moduleDefinitions,
+    moduleShapes: opts.moduleShapes
+      ? (() => {throw new Error('Can not update this param, because there is no need, because it is mutable')})()
+      : typeState.moduleShapes,
+    importStack: opts.importStack ?? typeState.importStack,
   })
 }
 
 export function addToScope(typeState: TypeState, identifier: string, type: Type.AnyType, pos: Position): TypeState {
   if (identifier === '$') return typeState
-  const newScope = new Map(top(typeState.scopes))
+  const newScope = new Map(top(typeState.scopes).typeLookup)
   if (newScope.has(identifier)) {
     throw new SemanticError(`Identifier "${identifier}" already exists in scope, please choose a different name.`, pos)
   }
   newScope.set(identifier, type)
 
   return update(typeState, {
-    scopes: [...typeState.scopes.slice(0, -1), newScope],
+    scopes: [...typeState.scopes.slice(0, -1), { forFn: top(typeState.scopes).forFn, typeLookup: newScope }],
   })
 }
 
@@ -91,11 +125,11 @@ export function addToTypeScope(typeState: TypeState, identifier: string, createT
   })
 }
 
-interface VarLookupInfo { type: Type.AnyType, fromOuterScope: boolean }
+interface VarLookupInfo { type: Type.AnyType, fromOuterFn: boolean }
 export function lookupVar(typeState: TypeState, identifier: string): VarLookupInfo | null {
   for (let scope of [...typeState.scopes].reverse()) {
-    const type = scope.get(identifier)
-    if (type) return { type, fromOuterScope: scope !== top(typeState.scopes) }
+    const type = scope.typeLookup.get(identifier)
+    if (type) return { type, fromOuterFn: scope.forFn !== top(typeState.scopes).forFn }
   }
   return null
 }
