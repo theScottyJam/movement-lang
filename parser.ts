@@ -23,11 +23,45 @@ interface ModuleInfo {
   readonly moduleShape: types.RecordType
 }
 
-function parse(text: string): Node.Root {
+class ParseError extends Error {}
+
+function camelCaseToSpaces(text) {
+  let newText = ''
+  for (const c of text) {
+    if (c.toUpperCase() === c) {
+      newText += ' ' + c.toLowerCase()
+    } else {
+      newText += c
+    }
+  }
+  return newText
+}
+
+function formatParseError(message: string, filePath: string) {
+  const lines = message.split('\n')
+  const errSummary = `Error in file ${filePath}\n` + lines.slice(0, 6).join('\n')
+  const expectedTokens = lines.slice(6)
+    .filter(line => line && !line.startsWith(' '))
+    .map(line => /^A (.*?)( token)? based on:$/.exec(line)?.[1])
+    .filter(phrase => !['whitespace', 'comment', 'multilineComment', 'newLine'].includes(phrase))
+    .map(phrase => phrase[0] === '"' ? phrase : camelCaseToSpaces(phrase))
+    .join(', ')
+
+  return errSummary + expectedTokens
+}
+
+function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): Node.Root {
   // A fresh parser needs to be made between each parse.
   const parser = new nearley.Parser(compiledGrammar);
 
-  parser.feed(text)
+  try {
+    parser.feed(text)
+  } catch (err) {
+    if (!('token' in err)) throw err
+    if (!err.message.startsWith('Syntax error')) throw err
+    throw new ParseError(formatParseError(err.message, pathForErrMsg))
+  }
+
   if (parser.results.length === 0) throw new BadSyntaxError('Unexpected end-of-file.', null)
   if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
   return parser.results[0]
@@ -52,7 +86,7 @@ function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts =
     if (moduleDefinitions.has(pathToLoad)) continue
     const source = loadModuleSource(pathToLoad)
     if (source == null) throw new Error(`Module not found: ${pathToLoad}`)
-    const module = parse(source)
+    const module = parse(source, { pathForErrMsg: path_ })
     moduleDefinitions.set(pathToLoad, module)
     const normalizedDependencies = module.dependencies.map(
       dependency => calcAbsoluteNormalizedPath(dependency, { relativeToFile: pathToLoad })
@@ -147,7 +181,7 @@ function rawRun(fileToRun: string, stdLib: ModuleInfo, { isMainModule = null } =
       printPosition(text, err.pos)
       return null
     } else {
-      if (!('token' in err)) throw err // If it's not a syntax error from Nearley
+      if (!(err instanceof ParseError)) throw err
       console.error(err.message)
       return null
     }
