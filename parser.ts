@@ -3,7 +3,10 @@ import path from 'path'
 import nearley from 'nearley'
 import { BadSyntaxError, SemanticError } from './language/exceptions'
 import * as Type from './language/Type'
+import * as types from './language/types'
+import * as values from './language/values'
 import type * as Node from './nodes/helpers/Node' // TODO: Maybe I need to move this type definition into a more accessible location
+import { createStdLibAst } from './stdLib'
 import builtGrammar from './grammar.built'
 
 const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)
@@ -13,6 +16,11 @@ const termColors = {
   yellow: '\u001b[33m',
   lightRed: '\x1B[1;31m',
   reset: '\u001b[0m',
+}
+
+interface ModuleInfo {
+  readonly module: values.RecordValue
+  readonly moduleShape: types.RecordType
 }
 
 function parse(text: string): Node.Root {
@@ -55,6 +63,7 @@ function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts =
 }
 
 function printPosition(text, pos) {
+  return // Disabling for now, as its completely broken anyways.
   const MAX_COLS = 75
   const OVERFLOW_LEFT_PAD = 20
 
@@ -97,13 +106,31 @@ function printPosition(text, pos) {
   console.error(bold + yellow + underline + reset)
 }
 
-export function run(path) {
-  let moduleDefinitions
-  let startingPath
+function runStdLib(): ModuleInfo {
+  const ast = createStdLibAst()
+  const moduleShape = ast.typeCheck({
+    moduleDefinitions: new Map(),
+    importStack: ['%stdLib%'],
+    stdLibShape: types.createRecord({ nameToType: new Map() }),
+    isMainModule: false,
+  })
+  const module = ast.exec({
+    moduleDefinitions: new Map(),
+    stdLib: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() }))
+  })
+  return { module, moduleShape }
+}
+
+// Returns null if an error was caught and reported.
+// If null is returned, just let the program exit naturally.
+// isMainModule can be set to true, if you want to load a library module. This is currently an unused feature.
+function rawRun(fileToRun: string, stdLib: ModuleInfo, { isMainModule = null } = {}): ModuleInfo | null {
+  let moduleDefinitions: Map<string, Node.Root>
+  let startingPath: string
   const text = '<unknown file contents>' // TODO: I need to correctly load the file in which the error occurred.
 
   try {
-    ;({ startingPath, moduleDefinitions } = recursiveParse(path))
+    ;({ startingPath, moduleDefinitions } = recursiveParse(fileToRun))
   } catch (err) {
     if (err instanceof SemanticError) {
       const { lightRed, reset } = termColors
@@ -113,39 +140,48 @@ export function run(path) {
       } else if (err.pos !== null) {
         throw new Error('Internal error: Forgot to set the "pos" attribute on this error')
       }
-      return
+      return null
     } else if (err instanceof BadSyntaxError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Syntax Error: ' + reset + err.message)
       printPosition(text, err.pos)
-      return
+      return null
     } else {
       if (!('token' in err)) throw err // If it's not a syntax error from Nearley
       console.error(err.message)
-      return
+      return null
     }
   }
 
   const ast = moduleDefinitions.get(startingPath)
+  let moduleShape: types.RecordType
   try {
-    ast.typeCheck({
+    moduleShape = ast.typeCheck({
       moduleDefinitions,
       importStack: [startingPath],
+      stdLibShape: stdLib.moduleShape,
+      isMainModule,
     })
   } catch (err) {
     if (err instanceof SemanticError) {
       const { lightRed, reset } = termColors
       console.error(lightRed + 'Semantic Error: ' + reset + err.message)
       printPosition(text, err.pos)
-      return
+      return null
     } else {
       throw err
     }
   }
 
-  ast.exec({
+  const module = ast.exec({
     moduleDefinitions,
+    stdLib: stdLib.module,
   })
+  return { module, moduleShape }
+}
+
+export function run(fileToRun) {
+  rawRun(fileToRun, runStdLib())
 }
 
 interface TestRunOpts {
@@ -161,6 +197,8 @@ export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { mo
     }
   })
 
+  const { module: stdLib, moduleShape: stdLibShape } = runStdLib()
+
   const ast = moduleDefinitions.get(startingPath)
   ast.typeCheck({
     behaviors: {
@@ -168,12 +206,14 @@ export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { mo
     },
     moduleDefinitions,
     importStack: [startingPath],
+    stdLibShape,
   })
   ast.exec({
     behaviors: {
       showDebugOutput: value => result.push(value)
     },
     moduleDefinitions,
+    stdLib
   })
 
   return result

@@ -46,15 +46,15 @@ const assertModuleNodeData = (data: unknown): { dependencies: readonly string[] 
 interface RootOpts { module: Node }
 export const root = ({ module }: RootOpts): Node.Root => ({
   dependencies: assertModuleNodeData(module.data).dependencies,
-  exec: ({ behaviors = {}, moduleDefinitions, cachedModules = { mutable: new Map() } }) => {
-    const rt = Runtime.create({ behaviors, moduleDefinitions, cachedModules })
+  exec: ({ behaviors = {}, moduleDefinitions, cachedModules = { mutable: new Map() }, stdLib }) => {
+    const rt = Runtime.create({ behaviors, moduleDefinitions, cachedModules, stdLib })
     const { rtRespState } = module.exec(rt)
 
     const nameToType = new Map([...rtRespState.exports.entries()].map(([name, value]) => [name, value.type]))
     return values.createRecord(rtRespState.exports, types.createRecord({ nameToType }))
   },
-  typeCheck: ({ behaviors = {}, moduleDefinitions, moduleShapes, importStack }) => {
-    const state = TypeState.create({ behaviors, moduleDefinitions, isMainModule: importStack.length === 1, moduleShapes, importStack })
+  typeCheck: ({ behaviors = {}, moduleDefinitions, moduleShapes, importStack, stdLibShape, isMainModule = null }) => {
+    const state = TypeState.create({ behaviors, moduleDefinitions, isMainModule: isMainModule ?? importStack.length === 1, moduleShapes, importStack, stdLibShape })
     const { respState } = module.typeCheck(state)
     return respState.moduleShape
   }
@@ -529,6 +529,7 @@ export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) => Node.cr
       behaviors: rt.behaviors,
       moduleDefinitions: rt.moduleDefinitions,
       cachedModules: rt.cachedModules,
+      stdLib: rt.stdLib,
     })
     rt.cachedModules.mutable.set(from_, module)
 
@@ -555,7 +556,8 @@ export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) => Node.cr
       behaviors: state.behaviors,
       moduleDefinitions: state.moduleDefinitions,
       moduleShapes: state.moduleShapes,
-      importStack: [...state.importStack, from_]
+      importStack: [...state.importStack, from_],
+      stdLibShape: state.stdLibShape,
     })
     state.moduleShapes.mutable.set(from_, type)
 
@@ -591,16 +593,11 @@ export const identifier = (pos: Position, { identifier }: IdentifierOpts) => Nod
   },
 })
 
-interface BuiltinIdentifierOpts { identifier: string }
-export const builtinIdentifier = (pos: Position, { identifier }: BuiltinIdentifierOpts) => Node.create({
+export const stdLibRef = (pos: Position) => Node.create({
   name: 'builtinIdentifier',
   pos,
-  exec: rt => {
-    throw new Error('TODO')
-  },
-  typeCheck: state => {
-    throw new Error('TODO')
-  },
+  exec: rt => ({ rtRespState: RtRespState.create(), value: rt.stdLib }),
+  typeCheck: state => ({ respState: RespState.create(), type: state.stdLibShape }),
 })
 
 interface TypeAlias { name: string, getType: TypeGetter, definedWithin: Node, typePos: Position }

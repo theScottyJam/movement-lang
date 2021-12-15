@@ -14,8 +14,11 @@ export interface RuntimeBehaviors {
 export interface Runtime {
   readonly scopes: readonly RuntimeScope[]
   readonly behaviors: RuntimeBehaviors
+  // Mapping of paths to AST trees for modules
   readonly moduleDefinitions: Map<string, Node.Root>
+  // Mapping of loaded modules
   readonly cachedModules: { readonly mutable: Map<string, values.RecordValue> }
+  readonly stdLib: values.RecordValue
 }
 
 function defaultShowDebugOutputBehaviors(value: AnyValue) {
@@ -27,8 +30,9 @@ interface CreateOpts {
   readonly behaviors?: Partial<RuntimeBehaviors>
   readonly moduleDefinitions: Map<string, Node.Root>
   readonly cachedModules: { readonly mutable: Map<string, values.RecordValue> }
+  readonly stdLib: values.RecordValue
 }
-export function create({ scopes = [], behaviors = {}, moduleDefinitions, cachedModules }: CreateOpts): Runtime {
+export function create({ scopes = [], behaviors = {}, moduleDefinitions, cachedModules, stdLib }: CreateOpts): Runtime {
   return {
     scopes,
     behaviors: {
@@ -36,6 +40,7 @@ export function create({ scopes = [], behaviors = {}, moduleDefinitions, cachedM
     },
     moduleDefinitions,
     cachedModules,
+    stdLib,
   }
 }
 
@@ -48,6 +53,7 @@ export function update(rt: Runtime, { scopes }: UpdateOpts): Runtime {
     behaviors: rt.behaviors,
     moduleDefinitions: rt.moduleDefinitions,
     cachedModules: rt.cachedModules,
+    stdLib: rt.stdLib,
   })
 }
 

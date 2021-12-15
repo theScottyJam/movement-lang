@@ -155,6 +155,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       moduleDefinitions: outerState.moduleDefinitions,
       moduleShapes: outerState.moduleShapes,
       importStack: outerState.importStack,
+      stdLibShape: outerState.stdLibShape,
     })
 
     // Adding generic params to type scope
@@ -184,7 +185,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
 
     // Getting declared body type
     const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
-    if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can returns type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
+    if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can return type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
     const capturedStates = bodyRespState.outerFnVars
 
     // Checking if calculated return types line up with declared body type

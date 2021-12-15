@@ -108,8 +108,8 @@
 
       'upperIdentifier': /[A-Z][a-zA-Z0-9]*_*/,
       'nonUpperIdentifier': /[a-z][a-zA-Z0-9]*_*|[0-9][a-zA-Z0-9]*_+/,
+      'builtinIdentifier': /\$[a-zA-Z0-9]+_*|\$[0-9][a-zA-Z0-9]*_+/,
       '$': '$',
-      'builtinIdentifier': /\$[a-zA-Z0-9]*_*|\$[0-9][a-zA-Z0-9]*_+/,
       'number': /\d+/,
       '#gets': '#gets',
       '#function': '#function',
@@ -149,7 +149,7 @@ nonEmptyDeliminated[PATTERN, DELIMITER, TRAILING_DELIMITER]
 
 root
   -> _ module {%
-    ([, module, ]) => nodes.root({ module })
+    ([, module]) => nodes.root({ module })
   %}
 
 module
@@ -362,8 +362,11 @@ expr100
   %} | %boolean {%
     ([token]) => nodes.value.boolean(asPos(token), { value: token.value === 'true' })
   %} | identifier {%
-    ([token]) => token.value[0] === '$' && token.length > 1
-      ? nodes.builtinIdentifier(asPos(token), { identifier: token.value })
+    ([token]) => token.value[0] === '$' && token.value.length > 1
+      ? nodes.propertyAccess(asPos(token), {
+        l: nodes.stdLibRef(asPos(token)),
+        identifier: token.value.slice(1),
+      })
       : nodes.identifier(asPos(token), { identifier: token.value })
   %} | stringLiteral {%
     id

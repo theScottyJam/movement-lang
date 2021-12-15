@@ -20,15 +20,18 @@ export interface Node {
 }
 
 interface RootExecOpts {
-  readonly behaviors: Partial<Runtime.RuntimeBehaviors>
+  readonly behaviors?: Partial<Runtime.RuntimeBehaviors>
   readonly moduleDefinitions: Map<string, Root>
   readonly cachedModules?: { mutable: Map<string, values.RecordValue> }
+  readonly stdLib: values.RecordValue
 }
 interface RootTypeCheckOpts {
-  readonly behaviors: Partial<TypeState.TypeStateBehaviors>
+  readonly behaviors?: Partial<TypeState.TypeStateBehaviors>
   readonly moduleDefinitions: Map<string, Root>
   readonly moduleShapes?: { readonly mutable: Map<string, types.RecordType> }
   readonly importStack?: readonly string[]
+  readonly stdLibShape: types.RecordType
+  readonly isMainModule?: boolean
 }
 export interface Root {
   readonly dependencies: readonly string[]

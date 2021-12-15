@@ -469,5 +469,6 @@ test('Able to have odd spacing', () => {
 # generics
 # unknown and never - e.g. addition with unknown types.
 # pattern match
-# I should make a special print function (like _printType), that prints out captured variables, for testing purposes
+# I should make a special print function (like I did with _printType), that prints out variables captured in a closure, for testing purposes (I can see if I'm correctly not capturing variables that don't need ot be captured)
+# stdLib (maybe it can be done in its own file)
 */

@@ -42,9 +42,11 @@ export interface TypeState {
   // List of modules that are currently being looked at, where the first is the main module.
   // Used to find circular dependencies.
   readonly importStack: readonly string[]
+  readonly stdLibShape: types.RecordType
 }
 
 const required = () => { throw new Error('Missing required param') }
+const InvalidParam = () => { throw new Error('Not allowed to provide this parameter') }
 
 function defaultShowDebugTypeOutputFn(value: Type.AnyType) {
   console.info(Type.repr(value))
@@ -63,6 +65,7 @@ export function create(opts: Partial<TypeState> = {}): TypeState {
     moduleDefinitions = required(),
     moduleShapes = { mutable: new Map() },
     importStack = [],
+    stdLibShape = required(),
   } = opts
 
   return {
@@ -77,6 +80,7 @@ export function create(opts: Partial<TypeState> = {}): TypeState {
     moduleDefinitions,
     moduleShapes,
     importStack,
+    stdLibShape,
   }
 }
 
@@ -88,11 +92,10 @@ export function update(typeState: TypeState, opts: Partial<TypeState>): TypeStat
     minPurity: opts.minPurity ?? typeState.minPurity,
     isBeginBlock: opts.isBeginBlock ?? typeState.isBeginBlock,
     isMainModule: opts.isMainModule ?? typeState.isMainModule,
-    moduleDefinitions: opts.moduleDefinitions ?? typeState.moduleDefinitions,
-    moduleShapes: opts.moduleShapes
-      ? (() => {throw new Error('Can not update this param, because there is no need, because it is mutable')})()
-      : typeState.moduleShapes,
+    moduleDefinitions: opts.moduleDefinitions ? InvalidParam() : typeState.moduleDefinitions,
+    moduleShapes: opts.moduleShapes ? InvalidParam() : typeState.moduleShapes,
     importStack: opts.importStack ?? typeState.importStack,
+    stdLibShape: opts.stdLibShape ? InvalidParam() : typeState.stdLibShape,
   })
 }
 
