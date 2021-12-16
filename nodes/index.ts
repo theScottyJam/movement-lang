@@ -7,6 +7,7 @@ import {
   assertRecordInnerDataType,
   assertRawFunctionValue,
   assertFunctionInnerDataType,
+  assertTagInnerDataType,
 } from './helpers/typeAssertions';
 import { RuntimeError, SemanticError, FlowControlReturnError } from '../language/exceptions'
 import * as Position from '../language/Position'
@@ -513,11 +514,11 @@ export const match = (pos: Position, { matchValue, matchArms }: MatchOpts) => No
 })
 
 interface ImportOpts { from: string }
-export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) => Node.create({
+interface ImportOptsContext { absoluteFrom: string }
+export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) => Node.create<ImportOptsContext>({
   name: 'import',
   pos,
-  exec: (rt, { typeCheckContext }) => {
-    const { absoluteFrom: from_ } = typeCheckContext as { absoluteFrom: string }
+  exec: (rt, { typeCheckContext: { absoluteFrom: from_ } }) => {
     if (rt.cachedModules.mutable.has(from_)) {
       return { rtRespState: RtRespState.create(), value: rt.cachedModules.mutable.get(from_) }
     }
@@ -611,14 +612,33 @@ export const typeAlias = (pos: Position, { name, getType, definedWithin, typePos
   },
 })
 
-// tag: (pos, { genericDefList, getType, typePos }) => tools.node({
-//   pos,
-//   exec: rt => ,
-//   typeCheck: state => {
-//     // const type = getType(pos, typePos)
-//     throw new Error('Not Implemented')
-//   },
-// }),
+interface ApplyTagOpts { tag: Node, content: Node }
+export const applyTag = (pos: Position, { tag, content }: ApplyTagOpts) => Node.create({
+  name: 'applyTag',
+  pos,
+  exec: rt => {
+    const { rtRespState: rtRespState1, value: tagValue } = tag.exec(rt)
+    const { rtRespState: rtRespState2, value: contentValue } = content.exec(rt)
+    assertTagInnerDataType(Type.assertIsConcreteType(tagValue.type).data)
+
+    const finalType = types.createTagged({ tag: tagValue.type as types.TagType })
+    return {
+      rtRespState: RtRespState.merge(rtRespState1, rtRespState2),
+      value: values.createTagged(contentValue, finalType),
+    }
+  },
+  typeCheck: state => {
+    const { respState: respState1, type: tagType } = tag.typeCheck(state)
+    const { respState: respState2, type: contentType } = content.typeCheck(state)
+
+    Type.assertTypeAssignableTo(contentType, assertTagInnerDataType(Type.assertIsConcreteType(tagType).data).boxedType, pos)
+    const type = types.createTagged({ tag: tagType as types.TagType })
+    return {
+      respState: RespState.merge(respState1, respState2),
+      type,
+    }
+  },
+})
 
 interface IndividualDeclaration { expr: Node, assignmentTarget: AssignmentTargetNode, assignmentTargetPos: Position }
 interface DeclarationOpts { export?: boolean, declarations: IndividualDeclaration[], expr: Node, newScope: boolean }

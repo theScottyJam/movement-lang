@@ -381,6 +381,43 @@ test('Both arms of expression-if must return compatible types', () => {
 })
 
 //
+// Pattern matching
+//
+
+test('Basic pattern matching functionality', () => {
+  expect(customTestRun('print match { x: 2 } { when { y: Y #int } then Y + 5; when { x: X } then X }')[0].raw).toBe(2n)
+  expect(customTestRun('print match { x: 2 } { when { x: X, y: Y #int } then Y + 5; when { x: X } then X }')[0].raw).toBe(2n)
+  expect(customTestRun('print match { x: 2 } { when {} then 3; when { x: X } then X }')[0].raw).toBe(3n)
+  expect(customTestRun('print match { x: 2 } { when { x: X } then X; when {} then 3 }')[0].raw).toBe(2n)
+})
+
+test('Type-widening within pattern matching', () => {
+  expect(customTestRun(`
+    let obj #{ x #int } = { x: 2, y: 3 }
+    print match obj { when { y: Y #int } then Y + 5; when { x: X } then X }
+  `)[0].raw).toBe(8n)
+})
+
+test('Pattern matching with basic primitives', () => {
+  expect(customTestRun('print match 2 { when x then x }')[0].raw).toBe(2n)
+  expect(customTestRun("print match 'hi' { when x then x }")[0].raw).toBe('hi')
+})
+
+test('Pattern matching with type constraints', () => {
+  expect(customTestRun('print match 5 { when x where x == 6 then x; when x where x == 5 then x + 10 }')[0].raw).toBe(15n)
+  expect(customTestRun('print match { x: 5 } { when { x: x where x == 5 } then x; when { x: x } where x == 6 then x + 10 }')[0].raw).toBe(5n)
+})
+
+test('Pattern matching will fail when operating on unrelated types', () => {
+  expect(() => customTestRun('print match 2 { when { x: x } then 0 }'))
+    .toThrow('Found type #int but expected a record.')
+})
+
+test('Nested record pattern in pattern matching', () => {
+  expect(customTestRun('print match { x: { y: 2 } } { when { x: { y: z } } then z }')[0].raw).toBe(2n)
+})
+
+//
 // Imports
 //
 
@@ -441,17 +478,63 @@ test('Can not use a begin block in an imported module', () => {
 })
 
 //
+// tags
+//
+
+test('Basic tag functionality', () => {
+  expect(customTestRun('let id = tag #int; let myId = id@ 2; let id@ myId2 = myId; print myId2')[0].raw).toBe(2n)
+  expect(customTestRun('let myTag = tag #{ x #int }; let boxed = myTag@ { x: 2 }; let myTag@ { x: value } = boxed; print value')[0].raw).toBe(2n)
+})
+
+test('Tags can only unbox their own kind', () => {
+  expect(() => customTestRun('let a = tag #int; let b = tag #int; let boxed = a@ 2; let b@ x = boxed'))
+    .toThrow('Found type "#:tag #int", but expected type "#:tag #int".')
+})
+
+test('Each tag has a unique type', () => {
+  expect(() => customTestRun('let a = tag #int; let b = tag #int; let result = if true then a else b'))
+    .toThrow('The following "if true" case of this condition has the type "#typeof<tag #int>", which is incompatible with the "if not" case\'s type, "#typeof<tag #int>".')
+})
+
+test('Tags in pattern matching', () => {
+  // You can't pattern match against different tags (they're incompatible types).
+  // You need to know which tag you're unwrapping in advance.
+  // (The plan is, if the tag is part of a variant, then you're allowed to pattern match against each variant, otherwise, you can't).
+  expect(() => customTestRun('let a = tag #int; let b = tag #int; print match a@ 2 { when b@ x then x; when a@ x then x + 1 }'))
+    .toThrow('Found type "#:tag #int", but expected type "#:tag #int".')
+})
+
+test('Type checking against tags', () => {
+  expect(customTestRun('let myTag = tag #int; let boxed #:myTag = myTag@ 2; let myTag@ value = boxed; print value')[0].raw).toBe(2n)
+  expect(customTestRun('let myTag = tag #int; let boxed = myTag@ 2; let myTag@ value = boxed as #:myTag; print value')[0].raw).toBe(2n)
+})
+
+test('Tagging can be nested', () => {
+  expect(customTestRun('let b = tag #int; let a = tag #:b; let boxed = a@ b@ 2; let a@ b@ unboxed = boxed; print unboxed')[0].raw).toBe(2n)
+})
+
+test('Can not use "#:" syntax on descendents of a tag', () => {
+  expect(() => customTestRun('let a = tag #int; let boxed = a@ 2; type alias #BadType = #:boxed'))
+    .toThrow('The provided value can not be used to make a descendent-matching type.')
+})
+
+//
 // etc
 //
 
 test('Able to have odd spacing', () => {
   expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
   expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
+  expect(customTestRun('begin{print 2 ; print 3}')[1].raw).toBe(3n)
   expect(customTestRun(' let x = 2 begin { print 0 print x } ')[1].raw).toBe(2n)
+  expect(customTestRun(' let x = 2 ; begin { print 0 print x } ')[1].raw).toBe(2n)
   expect(customTestRun(' print 2 ')[0].raw).toBe(2n)
   expect(customTestRun('').length).toBe(0)
   expect(customTestRun(' ').length).toBe(0)
   expect(customTestRun(" import other from './other' print other.x ", {
+    modules: { 'other': 'export let x = 2' }
+  })[0].raw).toBe(2n)
+  expect(customTestRun(" import other from './other' ; print other.x ", {
     modules: { 'other': 'export let x = 2' }
   })[0].raw).toBe(2n)
   expect(customTestRun(" import other from './other' begin { print other.x } ", {
@@ -468,7 +551,6 @@ test('Able to have odd spacing', () => {
 /* OTHER TESTS
 # generics
 # unknown and never - e.g. addition with unknown types.
-# pattern match
 # I should make a special print function (like I did with _printType), that prints out variables captured in a closure, for testing purposes (I can see if I'm correctly not capturing variables that don't need ot be captured)
 # stdLib (maybe it can be done in its own file)
 */

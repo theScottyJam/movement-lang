@@ -23,6 +23,13 @@ type purityTypes = typeof PURITY[keyof typeof PURITY]
 type TypeGetter = (TypeState, Position) => AnyType
 type ConcreteTypeGetter = (TypeState, Position) => Type.AnyConcreteType
 
+interface GenericParamDefinition {
+  identifier: string
+  getConstraint: ConcreteTypeGetter
+  identPos: Position
+  constraintPos: Position
+}
+
 interface IntOpts { value: bigint }
 export const int = (pos: Position, { value }: IntOpts) => Node.create({
   name: 'int',
@@ -77,6 +84,30 @@ export const boolean = (pos: Position, { value }: BooleanOpts) => Node.create({
   typeCheck: state => ({ respState: RespState.create(), type: types.createBoolean() }),
 })
 
+// TODO: Use genericParamDefList
+interface TagOpts { genericParamDefList: GenericParamDefinition[], getType: TypeGetter, typePos: Position }
+interface TagTypeContext { type: types.TagType }
+export const tag = (pos: Position, { genericParamDefList, getType, typePos }: TagOpts) => Node.create<TagTypeContext>({
+  name: 'tag',
+  pos,
+  exec: (rt, { typeCheckContext: { type } }) => ({
+    rtRespState: RtRespState.create(),
+    value: values.createTag(type),
+  }),
+  typeCheck: state => {
+    const type = types.createTag({
+      tagSentinel: Symbol('tag'),
+      boxedType: getType(state, typePos),
+    })
+    return {
+      respState: RespState.create(),
+      type,
+      typeCheckContext: { type }
+    }
+  },
+})
+
+
 interface RecordValueDescription { target: Node, requiredTypeGetter: TypeGetter, typeGetterPos: Position }
 interface RecordOpts { content: Map<string, RecordValueDescription> }
 export const record = (pos: Position, { content }: RecordOpts) => {
@@ -115,12 +146,6 @@ export const record = (pos: Position, { content }: RecordOpts) => {
   })
 }
 
-interface GenericParamDefinition {
-  identifier: string
-  getConstraint: ConcreteTypeGetter
-  identPos: Position
-  constraintPos: Position
-}
 interface FunctionOpts {
   params: AssignmentTargetNode[]
   body: Node

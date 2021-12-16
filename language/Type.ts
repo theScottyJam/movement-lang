@@ -42,6 +42,7 @@ export interface CategoryInfo<T extends CategoryGenerics> {
     readonly compare: (self: ConcreteType<T>, other: ConcreteType<T>) => boolean,
     readonly matchUpGenerics: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void,
     readonly fillGenericParams: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>,
+    readonly createDescendentMatchingType: ((self: Type<T>) => AnyConcreteType) | null
   }
 }
 
@@ -59,6 +60,7 @@ export interface ParameterType<T extends CategoryGenerics> {
 
 export type Type<T extends CategoryGenerics> = ConcreteType<T> | ParameterType<T>
 
+// A concrete type is like #int, while a parameter type refers to a generic type variable (like #T)
 export type AnyType = Type<{ name: string, data: unknown }>
 export type AnyConcreteType = ConcreteType<{ name: string, data: unknown }>
 export type AnyParameterType = ParameterType<{ name: string, data: unknown }>
@@ -69,6 +71,7 @@ interface CreateCategoryOpts<T extends CategoryGenerics> {
   readonly comparisonOverride?: typeof COMPARISON_OVERRIDES[keyof typeof COMPARISON_OVERRIDES]
   readonly matchUpGenerics?: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void
   readonly fillGenericParams?: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>
+  readonly createDescendentMatchingType?: ((self: Type<T>) => AnyConcreteType) | null
 }
 
 interface CreateTypeOpts<Data> {
@@ -121,6 +124,7 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
     comparisonOverride = null,
     matchUpGenerics = defaultMatchUpGenericsFn,
     fillGenericParams = defaultFillGenericParamsFn,
+    createDescendentMatchingType = null,
   } = opts
 
   const categoryInfo: CategoryInfo<T> = {
@@ -131,6 +135,7 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
       compare,
       matchUpGenerics,
       fillGenericParams,
+      createDescendentMatchingType,
     }
   }
 
@@ -198,6 +203,13 @@ export function matchUpGenerics<T extends CategoryGenerics>(type: Type<T>, { usi
 export function fillGenericParams<T extends CategoryGenerics>(type: Type<T>, { getReplacement }: FillGenericParamsFnOpts): Type<T> {
   if (isTypeParameter(type)) return getReplacement(type)
   return type.category[categoryBehaviors].fillGenericParams(type, { getReplacement })
+}
+
+export function getTypeMatchingDescendants(type: AnyType, pos: Position) {
+  if (isTypeParameter(type) || type.category[categoryBehaviors].createDescendentMatchingType == null) {
+    throw new SemanticError('The provided value can not be used to make a descendent-matching type.', pos)
+  }
+  return type.category[categoryBehaviors].createDescendentMatchingType(type)
 }
 
 //

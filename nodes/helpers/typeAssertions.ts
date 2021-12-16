@@ -62,3 +62,32 @@ export function assertFunctionInnerDataType(value: unknown): types.FunctionType[
 
   return value as types.FunctionType['data']
 }
+
+export function assertTagInnerDataType(value: unknown): types.TagType['data'] {
+  const passedAssertion = (
+    typeof value === 'object' &&
+    'tagSentinel' in value &&
+    'boxedType' in value
+  )
+
+  if (!passedAssertion) {
+    throw new Error(`INTERNAL ERROR: Received a value of an incorrect type`)
+  }
+
+  return value as types.TagType['data']
+}
+
+export function assertRawTaggedValue(value: unknown): values.TaggedValue['raw'] {
+  const passedAssertion = (
+    typeof value === 'object' &&
+    // Check if value is-a Value.Value
+    'raw' in value &&
+    'type' in value
+  )
+
+  if (!passedAssertion) {
+    throw new Error(`INTERNAL ERROR: Received a value of an incorrect type`)
+  }
+
+  return value as values.TaggedValue['raw']
+}

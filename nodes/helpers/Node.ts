@@ -62,9 +62,22 @@ interface AssignmentTargetNodeTypeCheckReturnType { respState: RespState.RespSta
 export interface AssignmentTargetNode {
   readonly name: string
   readonly pos?: Position.Position
+  // The allowFailures option can be set to true, to cause exec() to return null instead of throwing an
+  // error if the assignment failed. Useful for pattern matching.
+  // Some code just returns null without checking this argument, because it knows that code-path shouldn't
+  // execute otherwise (because you gave it something with a bad type, which typeCheck would normally catch, unless
+  // you passed the allowWidening flag to it)
   readonly exec: (rt: Runtime.Runtime, opts: AssignmentTargetNodeExecOpts) => AssignmentTargetNodeExecReturnType
-  // TODO: Rename these fields to something better?
+  // Called during normal assignment. A "incomingType" is passed in (the RHS of the assignment), which
+  // you're expected to match against, to make sure the incomingType is allowed.
+  // allowWidening may be set to true, to indicate the passed-in type is allowed to be more narrow
+  // (it's runtime type still can't though)
+  // This is useful for pattern-matching, because during pattern matching, you're trying to find more information
+  // about the passed-in type, e.g. `match value as #{} when { x: X } ...`
+  // this may cause incomingType to be set to the missingType sentinel, because no type information was found,
+  // because the incomingType was more narrow.
   readonly typeCheck: (state: TypeState.TypeState, opts: AssignmentTargetNodeTypeCheckOpts) => AssignmentTargetNodeTypeCheckReturnType
+  // This gets used when the RHS is not immediately known, e.g. a function parameter list.
   readonly contextlessTypeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
 

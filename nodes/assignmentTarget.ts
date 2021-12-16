@@ -1,6 +1,11 @@
 import type { Token } from 'moo'
 import * as Node from './helpers/Node';
-import { assertRawRecordValue, assertRecordInnerDataType } from './helpers/typeAssertions';
+import {
+  assertRawRecordValue,
+  assertRecordInnerDataType,
+  assertTagInnerDataType,
+  assertRawTaggedValue,
+} from './helpers/typeAssertions';
 import { SemanticError, RuntimeError } from '../language/exceptions'
 import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
@@ -77,8 +82,8 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
   pos,
   exec: (rt, { incomingValue, allowFailure = false }) => {
     const allBindings = []
+    if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
     for (const [identifier, assignmentTarget] of entries) {
-      if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
       const innerValue = assertRawRecordValue(incomingValue.raw).get(identifier)
       if (!innerValue) return null
       const bindings = assignmentTarget.exec(rt, { incomingValue: innerValue, allowFailure })
@@ -122,6 +127,47 @@ export const destructureObj = (pos: Position, { entries }: DestructurObjOpts) =>
     return {
       respState: RespState.merge(...respStates),
       type: types.createRecord({ nameToType }),
+    }
+  },
+})
+
+interface DestructureTaggedOpts { tag: Node.Node, innerContent: Node.AssignmentTargetNode }
+export const destructureTagged = (pos: Position, { tag, innerContent }: DestructureTaggedOpts) => Node.createAssignmentTarget({
+  name: 'destructureTagged',
+  pos,
+  exec: (rt, { incomingValue, allowFailure = false }) => {
+    if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
+    const { value: tagValue } = tag.exec(rt)
+    if (!Type.isTypeAssignableTo(incomingValue.type, Type.getTypeMatchingDescendants(tagValue.type, DUMMY_POS))) return null
+    const innerValue = assertRawTaggedValue(incomingValue.raw)
+    return innerContent.exec(rt, { incomingValue: innerValue, allowFailure })
+  },
+  typeCheck: (state, { incomingType, allowWidening = false, export: export_ = false }) => {
+    const { respState: respState1, type: tagType } = tag.typeCheck(state)
+    assertTagInnerDataType(Type.assertIsConcreteType(tagType).data)
+    if (incomingType !== Node.missingType) {
+      Type.assertTypeAssignableTo(incomingType, types.createTagged({ tag: tagType as types.TagType }), DUMMY_POS)
+    }
+    const { respState: respState2 } = innerContent.typeCheck(state, {
+      incomingType: incomingType === Node.missingType || types.isEffectivelyNever(incomingType)
+        ? incomingType
+        : (incomingType as types.TaggedType).data.tag.data.boxedType,
+      allowWidening,
+      export: export_,
+    })
+
+    return {
+      respState: RespState.merge(respState1, respState2),
+    }
+  },
+  contextlessTypeCheck: state => {
+    const { respState: respState1, type: tagType } = tag.typeCheck(state)
+    const { respState: respState2, type: innerContentType } = innerContent.contextlessTypeCheck(state)
+    state = TypeState.applyDeclarations(state, respState2)
+    Type.assertTypeAssignableTo(innerContentType, assertTagInnerDataType(Type.assertIsConcreteType(tagType).data).boxedType, pos)
+    return {
+      respState: RespState.merge(respState1, respState2),
+      type: types.createTagged({ tag: tagType as types.TagType }),
     }
   },
 })

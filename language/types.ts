@@ -46,23 +46,62 @@ const unknownCategory = Type.createCategory('unknown', {
 export const createUnknown = () => unknownCategory.create()
 export const isUnknown = (type: Type.AnyConcreteType): type is UnknownType => unknownCategory.typeInCategory(type)
 
-// createTag: ({ genericDefList, type: innerType, tagSymbol = Symbol('tag') }) => {
-//   return createType(types._tagSentinel, {
-//     repr: () => `tag ${innerType.repr()}`,
-//     data: { genericDefList, innerType, tagSymbol },
-//     compare: other => other.data.tagSymbol === tagSymbol,
-//     matchUpGenerics: (self, { usingType, onGeneric }) => {
-//       // innerType.matchUpGenerics({ usingType: usingType.data.get(name), onGeneric, })
-//     },
-//     fillGenericParams: (self, { getReplacement }) => {
-//       // const newNameToType = new Map()
-//       // for (const [name, type] of nameToType) {
-//       //   newNameToType.set(name, type.fillGenericParams({ getReplacement }))
-//       // }
-//       // return types.createRecord(newNameToType)
-//     },
-//   })
-// },
+
+// Tag //
+
+interface TagTypeData {
+  readonly tagSentinel: symbol
+  readonly boxedType: Type.AnyType
+}
+
+export type TagType = Type.ConcreteType<{ name: 'tag', data: TagTypeData }>
+const tagCategory = Type.createCategory('tag', {
+  repr: (self: TagType) => `#typeof<tag ${Type.repr(self.data.boxedType)}>`,
+  compare: (self: TagType, other: TagType) => self.data.tagSentinel === other.data.tagSentinel,
+  matchUpGenerics: (self: TagType, { usingType, onGeneric }) => {
+    Type.matchUpGenerics(self.data.boxedType, { usingType: usingType.data.boxedType, onGeneric })
+  },
+  fillGenericParams: (self: TagType, { getReplacement }): TagType => {
+    return createTag({
+      tagSentinel: self.data.tagSentinel,
+      boxedType: Type.fillGenericParams(self.data.boxedType, { getReplacement }),
+    })
+  },
+  createDescendentMatchingType: (self: TagType) => createTagged({ tag: self })
+})
+export const createTag = ({ boxedType, tagSentinel }: TagTypeData): TagType => tagCategory.create({
+  data: {
+    boxedType,
+    tagSentinel,
+  },
+})
+
+
+// Tagged //
+
+interface TaggedTypeData {
+  readonly tag: TagType
+}
+
+export type TaggedType = Type.ConcreteType<{ name: 'tagged', data: TaggedTypeData }>
+const taggedCategory = Type.createCategory('tagged', {
+  repr: (self: TaggedType) => `#:tag ${Type.repr(self.data.tag.data.boxedType)}`,
+  compare: (self: TaggedType, other: TaggedType) => self.data.tag.data.tagSentinel === other.data.tag.data.tagSentinel,
+  matchUpGenerics: (self: TaggedType, { usingType, onGeneric }) => {
+    // TODO: Not sure if I implemented this right
+    Type.matchUpGenerics(self.data.tag, { usingType: usingType.data.tag, onGeneric })
+  },
+  fillGenericParams: (self: TaggedType, { getReplacement }): TaggedType => {
+    const tag = Type.fillGenericParams(self.data.tag, { getReplacement })
+    return createTagged({
+      // TODO: Not sure if I should be throwing an error here.
+      tag: Type.isTypeParameter(tag) ? (()=>{throw new Error()})() : tag,
+    })
+  },
+})
+export const createTagged = ({ tag }: TaggedTypeData): TaggedType => taggedCategory.create({
+  data: { tag },
+})
 
 
 // Record //
@@ -137,7 +176,7 @@ const functionCategory = Type.createCategory('function', {
       } else {
         // If the assignee does not have a generic param found in the function's generic param list,
         // it could still be generic, but all that needs to happen is for the assigner to be able to assign
-        // to the assignee (or vice-verca, depending on the comparison direction).
+        // to the assignee (or vice-versa, depending on the comparison direction).
         // The assigner may still use a generic param from the generic param list
         // (equality of generic param list is calculated elsewhere), or something like this.
         const concreteAssigner = Type.isTypeParameter(assigner) ? assigner.constrainedBy : assigner

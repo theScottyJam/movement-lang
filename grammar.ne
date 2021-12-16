@@ -1,11 +1,16 @@
 ## Precedence key ##
 # expr10: 'IN', '=>', 'PRINT', 'ELSE'
+#   x where expr10 = ...
+# expr15: '@'
 # expr20: '==' '!='
+#   x @ expr20 = ...
 # expr30: 'AS'
+#   x > expr30 = ...
 # expr40: '+' '-'
 # expr50: '*'
 # expr60: '**'
 # expr70: 'GET', 'RUN'
+#   x #:expr70
 # expr80: 'The "(" in f()' 'The "<" in f<#T>()'
 # expr90: '.'
 # expr100: Things that don't require an order of operations, like literals
@@ -153,7 +158,7 @@ root
   %}
 
 module
-  -> deliminated[importStatement ";":?, _, _] deliminated[moduleLevelStatement ";":?, _, _] (%begin _ block _):? {%
+  -> deliminated[importStatement (_ ";"):?, _, _] deliminated[moduleLevelStatement (_ ";"):?, _, _] (%begin _ block _):? {%
     ([importEntries, statementEntries, beginBlockEntry]) => {
       const [,, beginBlock] = beginBlockEntry ?? [,,, null]
       const makeImportNodes = importEntries.map(x => x[0]).flat()
@@ -193,7 +198,7 @@ importStatement
   %}
 
 block
-  -> "{" _ (statement ";":? _):* "}" {%
+  -> "{" _ (statement (_ ";"):? _):* "}" {%
     ([start,, statementEntries, end]) => {
       const statements = statementEntries.map(([statement]) => statement)
       const content = [...statements].reverse().reduce((previousNode, makeNode) => (
@@ -299,6 +304,11 @@ expr10
       const [getBodyType] = getBodyTypeEntry ?? [null]
       return nodes.value.function_(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
     }
+  %} | expr15 {% id %}
+
+expr15
+  -> expr20 _ "@" _ expr15 {%
+    ([l,, ,, r]) => nodes.applyTag(range(l.pos, r.pos), { tag: l, content: r })
   %} | expr20 {% id %}
 
 expr20
@@ -382,19 +392,17 @@ expr100
       }
       return nodes.value.record(DUMMY_POS, { content })
     }
-  %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 _):+ "}" {%
+  %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 (_ ";"):? _):+ "}" {%
     ([,, matchValue,, ,, rawMatchArms, ]) => {
       const matchArms = rawMatchArms.map(([,, pattern,, ,, body]) => ({ pattern, body }))
       return nodes.match(DUMMY_POS, { matchValue, matchArms })
     }
+  %} | "tag" _ (genericParamDefList _):? type {%
+    ([,, genericParamDefList_, getType]) => {
+      const [genericParamDefList] = genericParamDefList_ ?? [null]
+      return nodes.value.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
+    }
   %}
-#   %} | "tag" _ (genericParamDefList _):? type {%
-#     // UNFINISHED (also probably should rename genericParamDefList to genericDefList)
-#     ([,,genericDefEntry, getType]) => {
-#       const [genericParamDefList] = genericDefEntry ?? [null]
-#       nodes.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
-#     }
-#   %}
 
 stringLiteral
   -> %stringStart %stringContent:? %stringEnd {%
@@ -409,11 +417,16 @@ pattern10
   %} | pattern20 {% id %}
 
 pattern20
-  -> pattern30 _ ">" _ expr10 {%
-    ([pattern,, ,, constraint]) => { throw new Error('Not Implemented!') } // Can't be done until comparison type classes are done.
+  -> expr20 _ "@" _ pattern20 {%
+    ([tag,, ,, pattern]) => nodes.assignmentTarget.destructureTagged(DUMMY_POS, { tag, innerContent: pattern })
   %} | pattern30 {% id %}
 
 pattern30
+  -> pattern40 _ ">" _ expr30 {%
+    ([pattern,, ,, constraint]) => { throw new Error('Not Implemented!') } // Can't be done until comparison type classes are done.
+  %} | pattern40 {% id %}
+
+pattern40
   -> userValueIdentifier (_ type):? {%
     ([identifier, maybeGetTypeEntry]) => {
       const [, getType] = maybeGetTypeEntry ?? []
@@ -464,6 +477,14 @@ type
       else if (token.value === '#never') return () => types.createNever()
       else if (token.value === '#unknown') return () => types.createUnknown()
       else throw new SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
+    }
+  %} | "#" ":" _ expr70  {%
+    ([,,, expr]) => (state, pos) => {
+      const { respState, type } = expr.typeCheck(state)
+      // Ignoring the respState - there's currently not a way to transfer that back up.
+      // Plus, it has bad information, like, dependendencies on variables from outside scopes that
+      // don't actually exist, because we're never going to execute this expression.
+      return Type.getTypeMatchingDescendants(type, pos)
     }
   %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
     ([, ,, entries, ]) => {
