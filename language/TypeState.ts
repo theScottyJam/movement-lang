@@ -128,6 +128,7 @@ export function addToTypeScope(typeState: TypeState, identifier: string, createT
   })
 }
 
+// Looks up the type for a variable
 interface VarLookupInfo { type: Type.AnyType, fromOuterFn: boolean }
 export function lookupVar(typeState: TypeState, identifier: string): VarLookupInfo | null {
   for (let scope of [...typeState.scopes].reverse()) {
@@ -137,6 +138,7 @@ export function lookupVar(typeState: TypeState, identifier: string): VarLookupIn
   return null
 }
 
+// Looks up a defined type, like #MyTypeAlias
 interface TypeLookupInfo { createType: createTypeFn }
 export function lookupType(typeState: TypeState, identifier: string): TypeLookupInfo | null {
   for (let scope of [...typeState.definedTypes].reverse()) {

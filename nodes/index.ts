@@ -335,11 +335,11 @@ export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpt
   data: {
     type: 'INVOKE',
   },
-  exec: rt => {
-    const fnExprRes = fnExpr.exec(rt)
+  exec: outerRt => {
+    const fnExprRes = fnExpr.exec(outerRt)
     const fn = assertRawFunctionValue(fnExprRes.value.raw)
-    rt = Runtime.update(rt, { scopes: fn.capturedScope })
-    const argResults = args.map(arg => arg.exec(rt))
+    let rt = Runtime.update(outerRt, { scopes: fn.capturedScope })
+    const argResults = args.map(arg => arg.exec(outerRt))
     for (const [param, value] of zip(fn.params, argResults.map(res => res.value))) {
       const allBindings = param.exec(rt, { incomingValue: value })
       rt = Runtime.update(rt, { scopes: [...rt.scopes, ...allBindings] })
@@ -652,7 +652,7 @@ export const declaration = (pos: Position, { export: export_ = false, declaratio
       rtRespStates.push(rtRespState)
       const bindings = decl.assignmentTarget.exec(rt, { incomingValue: value })
       rtRespStates.push(RtRespState.create({
-        exports: new Map(bindings.map(({ identifier, value }) => [identifier, value]))
+        exports: new Map(!export_ ? [] : bindings.map(({ identifier, value }) => [identifier, value])),
       }))
       rt = bindings.reduce((rt, { identifier, value }) => (
         Runtime.update(rt, { scopes: [...rt.scopes, { identifier, value }] })

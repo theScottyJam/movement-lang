@@ -37,6 +37,7 @@ export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, t
   return Node.createAssignmentTarget({
     name: 'bind',
     pos,
+    allData: { identifier, getTypeConstraint, identPos, typeConstraintPos },
     exec: (rt, { incomingValue, allowFailure = false }) => {
       if (typeConstraint && !Type.isTypeAssignableTo(incomingValue.type, typeConstraint)) {
         if (allowFailure) return null

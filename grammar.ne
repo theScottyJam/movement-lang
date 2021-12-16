@@ -42,7 +42,6 @@
       'whitespace': /[ \t]+/,
       'newLine':  { match: '\n', lineBreaks: true },
 
-      'boolean': ['true', 'false'],
       'stringStart': { match: "'", push: 'string' },
 
       '+': '+',
@@ -59,20 +58,9 @@
       ">" return '>'
       */
 
-      'let': 'let',
-      'in': 'in',
       '=>': '=>',
       '=': '=',
       '.': '.',
-      /*
-      "and" return 'AND'
-      "or" return 'OR'
-      "not" return 'NOT'
-      "instanceof" return 'INSTANCEOF'
-      "is" return 'IS'
-      */
-      'print': 'print',
-      '_printType': '_printType',
 
       ',': ',',
       /*
@@ -89,36 +77,53 @@
       '@': '@',
       ';': ';',
 
-      'if': 'if',
-      'then': 'then',
-      'else': 'else',
-      'function': 'function',
-      'return': 'return',
-      'gets': 'gets',
-      'get': 'get',
-      'run': 'run',
-      'begin': 'begin',
-      'type': 'type',
-      'alias': 'alias',
-      'as': 'as',
-      'of': 'of',
-      'match': 'match',
-      'when': 'when',
-      'where': 'where',
-      'tag': 'tag',
-      'variant': 'variant',
-      'export': 'export',
-      'import': 'import',
-      'from': 'from',
-
       'upperIdentifier': /[A-Z][a-zA-Z0-9]*_*/,
-      'nonUpperIdentifier': /[a-z][a-zA-Z0-9]*_*|[0-9][a-zA-Z0-9]*_+/,
+      'nonUpperIdentifier': {
+        match: /_?[a-z][a-zA-Z0-9]*_*|[0-9][a-zA-Z0-9]*_+|_[0-9][a-zA-Z0-9]*/,
+        type: moo.keywords({
+          'boolean': ['true', 'false'],
+          'let': 'let',
+          'in': 'in',
+          'print': 'print',
+          '_printType': '_printType',
+          'if': 'if',
+          'then': 'then',
+          'else': 'else',
+          'function': 'function',
+          'return': 'return',
+          'gets': 'gets',
+          'get': 'get',
+          'run': 'run',
+          'begin': 'begin',
+          'type': 'type',
+          'alias': 'alias',
+          'as': 'as',
+          'of': 'of',
+          'match': 'match',
+          'when': 'when',
+          'where': 'where',
+          'tag': 'tag',
+          'variant': 'variant',
+          'export': 'export',
+          'import': 'import',
+          'from': 'from',
+          /*
+          "and" return 'AND'
+          "or" return 'OR'
+          "not" return 'NOT'
+          */
+        }),
+      },
       'builtinIdentifier': /\$[a-zA-Z0-9]+_*|\$[0-9][a-zA-Z0-9]*_+/,
       '$': '$',
       'number': /\d+/,
-      '#gets': '#gets',
-      '#function': '#function',
-      'simpleType': /\#[a-z][a-zA-Z0-9]*/,
+      'simpleType': {
+        match: /\#[a-z][a-zA-Z0-9]*/,
+        type: moo.keywords({
+          '#gets': '#gets',
+          '#function': '#function',
+        })
+      },
       'userType': /\#[A-Z][a-zA-Z0-9]*/,
       '#': '#',
 

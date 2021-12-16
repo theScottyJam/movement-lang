@@ -149,7 +149,7 @@ export const record = (pos: Position, { content }: RecordOpts) => {
 interface FunctionOpts {
   params: AssignmentTargetNode[]
   body: Node
-  getBodyType: TypeGetter
+  getBodyType: TypeGetter | null
   bodyTypePos: Position
   purity: purityTypes
   genericParamDefList: GenericParamDefinition[]

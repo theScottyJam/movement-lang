@@ -14,7 +14,10 @@ type ValueOf<T> = T[keyof T]
 export interface Node {
   readonly name: string
   readonly pos?: Position.Position
+  // allData exposes all data related to this node, while data only exposes what other nodes might need.
+  // allData is for debugging purposes, and to let outside observers analyze the ast tree.
   readonly data?: unknown
+  readonly allData?: any,
   readonly exec: (rt: Runtime.Runtime) => { rtRespState: RtRespState.RtRespState, value: Value.AnyValue }
   readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
@@ -43,6 +46,7 @@ interface NodeOpts<T> {
   readonly name: string
   readonly pos?: Position.Position
   readonly data?: unknown
+  readonly allData?: any,
   readonly exec: (rt: Runtime.Runtime, { typeCheckContext }: { typeCheckContext: T }) => { rtRespState: RtRespState.RtRespState, value: Value.AnyValue }
   readonly typeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType, typeCheckContext?: T }
 }
@@ -62,6 +66,8 @@ interface AssignmentTargetNodeTypeCheckReturnType { respState: RespState.RespSta
 export interface AssignmentTargetNode {
   readonly name: string
   readonly pos?: Position.Position
+  readonly data?: unknown
+  readonly allData?: unknown
   // The allowFailures option can be set to true, to cause exec() to return null instead of throwing an
   // error if the assignment failed. Useful for pattern matching.
   // Some code just returns null without checking this argument, because it knows that code-path shouldn't
@@ -81,13 +87,14 @@ export interface AssignmentTargetNode {
   readonly contextlessTypeCheck: (state: TypeState.TypeState) => { respState: RespState.RespState, type: Type.AnyType }
 }
 
-export function create<Context>({ name, pos, data = undefined, exec, typeCheck }: NodeOpts<Context>): Node {
+export function create<Context>({ name, pos, data = undefined, allData = undefined, exec, typeCheck }: NodeOpts<Context>): Node {
   let typeCheckRan = false
   let context: Context | null = null
   return {
     name,
     pos,
     data,
+    allData,
     exec(rt: Runtime.Runtime) {
       if (!typeCheckRan) throw new Error('INTERNAL ERROR: You must run type check first.')
       return exec(rt, { typeCheckContext: context })
@@ -102,10 +109,10 @@ export function create<Context>({ name, pos, data = undefined, exec, typeCheck }
   }
 }
 
-export function createInvokeNode({ name, pos, data = undefined, exec, typeCheck }: InvokeNode): InvokeNode {
-  return { name, pos, data, exec, typeCheck }
+export function createInvokeNode({ name, pos, data = undefined, allData = undefined, exec, typeCheck }: InvokeNode): InvokeNode {
+  return { name, pos, data, allData, exec, typeCheck }
 }
 
-export function createAssignmentTarget({ name, pos, exec, typeCheck, contextlessTypeCheck }: AssignmentTargetNode): AssignmentTargetNode {
-  return { name, pos, exec, typeCheck, contextlessTypeCheck }
+export function createAssignmentTarget({ name, pos, data = undefined, allData = undefined, exec, typeCheck, contextlessTypeCheck }: AssignmentTargetNode): AssignmentTargetNode {
+  return { name, pos, data, allData, exec, typeCheck, contextlessTypeCheck }
 }

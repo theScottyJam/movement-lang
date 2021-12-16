@@ -26,6 +26,13 @@ const booleanCategory = Type.createCategory('boolean', {
 })
 export const createBoolean = () => booleanCategory.create()
 
+// Used only within the content of a private tag, to hold arbitrary information
+export type InternalType = Type.ConcreteType<{ name: 'internal', data: undefined }>
+const internalCategory = Type.createCategory('internal', {
+  repr: (self: InternalType) => '#<internal>',
+})
+export const createInternal = () => internalCategory.create()
+
 export type NeverType = Type.ConcreteType<{ name: 'never', data: undefined }>
 const neverCategory = Type.createCategory('never', {
   repr: (self: NeverType) => '#never',

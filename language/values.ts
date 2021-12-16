@@ -15,6 +15,10 @@ export const createString = (raw: string) => Value.create({ raw, type: types.cre
 export type BooleanValue = Value.Value<types.BooleanType, boolean>
 export const createBoolean = (raw: boolean) => Value.create({ raw, type: types.createBoolean() })
 
+// Used only within the content of a private tag, to hold arbitrary information
+export type InternalValue = Value.Value<types.InternalType, any>
+export const createInternal = (raw: any) => Value.create({ raw, type: types.createInternal() })
+
 export type TagValue = Value.Value<types.TagType, undefined>
 export const createTag = (type: types.TagType) => Value.create({ raw: undefined, type })
 
