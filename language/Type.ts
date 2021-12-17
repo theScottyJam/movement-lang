@@ -99,6 +99,10 @@ export function isTypeParameter<T extends CategoryGenerics>(type: Type<T>): type
   return 'parameterSentinel' in type
 }
 
+export function getConstrainingType<T extends CategoryGenerics>(type: Type<T>): ConcreteType<T> {
+  return isTypeParameter(type) ? type.constrainedBy : type
+}
+
 export function assertIsTypeParameter<T extends CategoryGenerics>(type: Type<T>, errMessage = 'INTERNAL ERROR: Expected a parameter type'): ParameterType<T> {
   if (!('parameterSentinel' in type)) throw new Error(errMessage)
   return type

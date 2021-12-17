@@ -15,7 +15,9 @@ export const customTestRun = (text, ...args) => {
       lines[0] = lines[0].slice(0, pos.first_column)
       lines[lines.length - 1] = lines[lines.length - 1].slice(pos.last_column)
     }
-    throw new Error(message + ' -- ' + lines.join('\\n'))
+    const newErr = new Error(message + ' -- ' + lines.join('\\n'))
+    newErr.stack = err.stack
+    throw newErr
   }
 }
 

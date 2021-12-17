@@ -6,7 +6,7 @@ import * as Type from './language/Type'
 import * as types from './language/types'
 import * as values from './language/values'
 import type * as Node from './nodes/helpers/Node' // TODO: Maybe I need to move this type definition into a more accessible location
-import { createStdLibAst } from './stdLib'
+import { createStdLibAst } from './stdLib/stdLib'
 import builtGrammar from './grammar.built'
 
 const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)

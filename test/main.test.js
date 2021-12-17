@@ -1,6 +1,6 @@
 import { customTestRun, errorCodeOf } from './util'
 
-describe('literals', () => {
+describe('Literals', () => {
   test('It creates an integer', () => {
     expect(customTestRun('print 2')[0].raw).toBe(2n)
   })
@@ -113,7 +113,7 @@ describe('Main syntax', () => {
   })
 })
 
-describe('assignment', () => {
+describe('Assignment', () => {
   test('Module-level declarations can be constrained by conditions via "where"', () => {
     expect(customTestRun('let y where y == 4 = 2 + 2; print y')[0].raw).toBe(4n)
     expect(errorCodeOf(() => customTestRun('let y where y != 4 = 2 + 2; print y'))).toBe('failedValueConstraint')
@@ -169,7 +169,7 @@ describe('assignment', () => {
   })
 })
 
-describe('functions', () => {
+describe('Functions', () => {
   test('No parameter function', () => {
     expect(customTestRun('let fn = () => 2; print fn()')[0].raw).toBe(2n)
   })
@@ -211,7 +211,7 @@ describe('functions', () => {
   })
 })
 
-describe('scoping', () => {
+describe('Scoping', () => {
   test('Unable to access variables outside of block scope', () => {
     expect(() => customTestRun('begin { if true { let x = 2 }; print x }'))
       .toThrow('Attempted to access undefined variable x')
@@ -257,7 +257,7 @@ describe('scoping', () => {
   })
 })
 
-describe('types', () => {
+describe('Types', () => {
   test('Can assign to correct primitive type declarations', () => {
     expect(customTestRun('let x #int = 2; print x')[0].raw).toBe(2n)
     expect(customTestRun('let x #boolean = true; print x')[0].raw).toBe(true)
@@ -277,7 +277,7 @@ describe('types', () => {
       .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }".')
   })
 
-  test('core function types', () => {
+  test('Core function types', () => {
     expect(customTestRun('let fn #(#int) => #int = (x #int) => x').length).toBe(0)
     expect(() => customTestRun('let fn #() => #int = (x #int) => x'))
       .toThrow('Found type "#(#int) => #int", but expected type "#() => #int".')
@@ -292,7 +292,7 @@ describe('types', () => {
     expect(() => customTestRun('let fn #(#{ x #int }) => #int = (x #{ x #int, y #int }) => 2').length).toThrow('Found type "#(#{ x #int, y #int }) => #int", but expected type "#(#{ x #int }) => #int".')
   })
 
-  test('function type purity', () => {
+  test('Function type purity', () => {
     expect(customTestRun('let fn #() => #int = () => 2').length).toBe(0)
     expect(customTestRun('let fn #gets () => #int = () => 2').length).toBe(0)
     expect(customTestRun('let fn #function() #int = () => 2').length).toBe(0)
@@ -371,7 +371,7 @@ describe('types', () => {
   })
 })
 
-describe('pattern matching', () => {
+describe('Pattern matching', () => {
   test('Basic pattern matching functionality', () => {
     expect(customTestRun('print match { x: 2 } { when { y: Y #int } then Y + 5; when { x: X } then X }')[0].raw).toBe(2n)
     expect(customTestRun('print match { x: 2 } { when { x: X, y: Y #int } then Y + 5; when { x: X } then X }')[0].raw).toBe(2n)
@@ -406,7 +406,7 @@ describe('pattern matching', () => {
   })
 })
 
-describe('imports', () => {
+describe('Imports', () => {
   test('Able to import other modules', () => {
     expect(customTestRun("import other from './other'; print other.fn()", {
       modules: { 'other': 'export let fn = () => 2' }
@@ -524,7 +524,7 @@ describe('tags', () => {
   })
 })
 
-describe('etc', () => {
+describe('Etc', () => {
   test('Able to have odd spacing', () => {
     expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
     expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
@@ -556,8 +556,95 @@ describe('etc', () => {
   })
 })
 
+describe('Generics', () => {
+  test('Basic generic functionality', () => {
+    expect(customTestRun('let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 3)')[0].raw).toBe(2n)
+    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn<#int, #string>(false, 2, 'hi')")[0].raw).toBe('hi')
+
+    expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 'hi')"))
+      .toThrow('Found type "#string", but expected type "#int".')
+  })
+
+  test('Auto-determine generic types', () => {
+    expect(customTestRun('let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, 2, 3)')[0].raw).toBe(2n)
+    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn(false, 2, 'hi')")[0].raw).toBe('hi')
+    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn<#int>(false, 2, 'hi')")[0].raw).toBe('hi')
+    expect(customTestRun('let fn = <#T>({ inner: inner #T }) => inner; print fn({ inner: 2 })')[0].raw).toBe(2n)
+
+    expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string>(2)"))
+      .toThrow('Found type "#int", but expected type "#string".')
+    expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, 2, 'hi')"))
+      .toThrow('Found type "#string", but expected type "#int".')
+
+    expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, { x: 2 }, { x: 4, y: 3 }).x")[0].raw).toBe(2n)
+    expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; _printType fn(true, { x: 2 }, { x: 4, y: 3 })")[0]).toBe('#{ x #int }')
+  })
+
+  test('Provide too many generic params', () => {
+    expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string, #int>(2)"))
+      .toThrow('The function of type #(#T) => #T must be called with at most 1 generic parameters, but got called with 2.')
+  })
+
+  test('Type constraints on generics', () => {
+    expect(customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ x: 3, y: 4 }) - 1')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ x: 3, y: 4 }) - 1')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
+    expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ y #int }>({ inner: { y: 4 } })'))
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+    expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 2 } })'))
+      .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }".')
+    expect(() => customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ y: 4 })'))
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+    expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { y: 4 } })'))
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+  })
+
+  test('Generic return types/values', () => {
+    expect(customTestRun('let fn = <#T>(value #T) #{ x #T } => { x: value }; print fn(2).x')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T>(value #T) => { x: value }; print fn(2).x')[0].raw).toBe(2n)
+  })
+
+  test('Multiple generics when destructuring', () => {
+    expect(customTestRun("let fn = <#T>({ a: a #T, b: b #T }) => b; print fn({ a: 2, b: 3 })")[0].raw).toBe(3n)
+    expect(() => customTestRun("let fn = <#T>({ a: a #T, b: b #T }) => b; print fn({ a: 2, b: 'hi' })"))
+      .toThrow('Found type "#string", but expected type "#int".')
+
+    expect(customTestRun("let fn = <#T, #U>({ a: a #T, b: b #U }) => { x: a, y: b }; print fn({ a: 2, b: 'hi' }).y")[0].raw).toBe('hi')
+  })
+
+  test('Generic types are not interchangeable', () => {
+    // expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => if true then a else b; print fn(2, 'hi')"))
+    //   .toThrow('?')
+    // expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => let x #U = a in x; print fn(2, 'hi')"))
+    //   .toThrow('?')
+    expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => if true then a else b; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
+      .toThrow('The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case\'s type, "#U".')
+    expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => let z #U = a in z; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
+      .toThrow('Found type "#T", but expected type "#U".')
+  })
+
+  test('Generics from the same source are interchangeable', () => {
+    expect(customTestRun('let fn = <#T>(x #T) => let y #T = x in y; print fn(2)')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T of #{ y #int }>(x #T) => let y #T = x in y; print fn({ y: 2 }).y')[0].raw).toBe(2n)
+  })
+
+  xit('??????????', () => {
+    // TODO: I need to store the generic params on the stack, if I'm wanting to be able to use them in these sorts of locations.
+    expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)
+  })
+
+  // Assigning generics to each other
+  // * nested generics
+  // * Multiple generics vs reusing the same generic
+  // * With constraints
+  // * expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)
+  // Use one generic param within the constraint of another
+  // Try things like addition and function calling with generics (w/ type constraints) - I might not be doing concrete/param types correctly
+  // Eventually: Usage with tags.
+})
+
 /* OTHER TESTS
-# generics
-# unknown and never - e.g. addition with unknown types.
+# unknown and never
 # I should make a special print function (like I did with _printType), that prints out variables captured in a closure, for testing purposes (I can see if I'm correctly not capturing variables that don't need ot be captured)
 */

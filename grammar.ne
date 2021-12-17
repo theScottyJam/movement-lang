@@ -11,8 +11,7 @@
 # expr60: '**'
 # expr70: 'GET', 'RUN'
 #   x #:expr70
-# expr80: 'The "(" in f()' 'The "<" in f<#T>()'
-# expr90: '.'
+# expr80: '.', 'The "(" in f()', 'The "<" in f<#T>()'
 # expr100: Things that don't require an order of operations, like literals
 
 @preprocessor typescript
@@ -359,17 +358,14 @@ expr80
       const [genericParams] = genericParamListEntry ?? [[]]
       return nodes.invoke(DUMMY_POS, { fnExpr, genericParams, args: args.flat() })
     }
-  %} | expr90 {% id %}
+  %} | expr80 _ "." _ userValueIdentifier {%
+    ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
+  %} | expr100 {% id %}
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
       ([,, entries]) => entries.map(([getType]) => ({ getType, pos: DUMMY_POS }))
     %}
-
-expr90
-  -> expr90 _ "." _ userValueIdentifier {%
-    ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
-  %} | expr100 {% id %}
 
 expr100
   -> %number {%

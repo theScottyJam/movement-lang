@@ -297,7 +297,7 @@ export const propertyAccess = (pos: Position, { l, identifier }: PropertyAccessO
   typeCheck: state => {
     const { respState, type: lType } = l.typeCheck(state)
     Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
-    const result = assertRecordInnerDataType(Type.assertIsConcreteType(lType).data).nameToType.get(identifier)
+    const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).nameToType.get(identifier)
     if (!result) throw new SemanticError(`Failed to find the identifier "${identifier}" on the record of type ${Type.repr(lType)}.`, pos)
     return { respState, type: result }
   },
@@ -370,7 +370,7 @@ export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpt
     }
     // Figure out the values of the generic params, and make sure they hold against the constraints
     let valuesOfGenericParams = new Map()
-    for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes)) {
+    for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes.slice(0, genericParams.length))) {
       const type = assignerGenericParam.getType(state, assignerGenericParam.pos)
       Type.assertTypeAssignableTo(type, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
       valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, type)
@@ -384,15 +384,15 @@ export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokeOpt
       throw new SemanticError(`Found ${argTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
     for (const [arg, assignerParamType, assigneeParamType] of zip3(args, argTypes, fnTypeData.paramTypes)) {
-      const concrete = Type.isTypeParameter(assigneeParamType) ? assigneeParamType.constrainedBy : assigneeParamType
-      Type.assertTypeAssignableTo(assignerParamType, concrete, arg.pos)
+      // Eventually I need to derive positions from arg.pos
+
       // Check that it uses generics properly
       Type.matchUpGenerics(assigneeParamType, {
         usingType: assignerParamType,
         onGeneric({ self, other }) {
           const genericValue = valuesOfGenericParams.get(self.parameterSentinel)
           if (!genericValue) {
-            Type.assertTypeAssignableTo(other, self, DUMMY_POS)
+            Type.assertTypeAssignableTo(other, self.constrainedBy, DUMMY_POS)
             valuesOfGenericParams.set(self.parameterSentinel, other)
           } else {
             Type.assertTypeAssignableTo(other, genericValue, DUMMY_POS)
