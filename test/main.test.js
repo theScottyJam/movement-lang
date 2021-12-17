@@ -624,11 +624,13 @@ describe('Generics', () => {
       .toThrow('Found type "#T", but expected type "#U".')
   })
 
-  test('Generics from the same source are interchangeable', () => {
+  // TODO
+  xit('Generics from the same source are interchangeable', () => {
     expect(customTestRun('let fn = <#T>(x #T) => let y #T = x in y; print fn(2)')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ y #int }>(x #T) => let y #T = x in y; print fn({ y: 2 }).y')[0].raw).toBe(2n)
   })
 
+  // TODO
   xit('??????????', () => {
     // TODO: I need to store the generic params on the stack, if I'm wanting to be able to use them in these sorts of locations.
     expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)

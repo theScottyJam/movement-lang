@@ -47,6 +47,7 @@ const assertModuleNodeData = (data: unknown): { dependencies: readonly string[] 
 interface RootOpts { module: Node }
 export const root = ({ module }: RootOpts): Node.Root => ({
   dependencies: assertModuleNodeData(module.data).dependencies,
+  allData: { module },
   exec: ({ behaviors = {}, moduleDefinitions, cachedModules = { mutable: new Map() }, stdLib }) => {
     const rt = Runtime.create({ behaviors, moduleDefinitions, cachedModules, stdLib })
     const { rtRespState } = module.exec(rt)
@@ -66,6 +67,7 @@ export const module = (pos: Position, { content, dependencies }: ModuleOpts) => 
   name: 'module',
   pos,
   data: { dependencies: [...new Set(dependencies)] },
+  allData: { dependencies: [...new Set(dependencies)], content },
   exec: rt => content.exec(rt),
   typeCheck: state => content.typeCheck(state),
 })

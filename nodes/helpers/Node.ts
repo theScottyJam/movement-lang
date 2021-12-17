@@ -38,6 +38,7 @@ interface RootTypeCheckOpts {
 }
 export interface Root {
   readonly dependencies: readonly string[]
+  readonly allData?: any,
   readonly exec: (opts: RootExecOpts) => values.RecordValue
   readonly typeCheck: (opts: RootTypeCheckOpts) => types.RecordType
 }

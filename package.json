@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "nearleyc grammar.ne -o grammar.built.ts && node --es-module-specifier-resolution=node --loader ts-node/esm ./index.ts",
+    "start": "nearleyc grammar.ne -o grammar.built.ts && node --es-module-specifier-resolution=node --loader ts-node/esm ./main.ts",
     "test": "nearleyc grammar.ne -o grammar.built.ts && jest",
     "test-watch": "echo '===================================' && echo 'WARNING: ne files do not auto-build' && echo '===================================' && nearleyc grammar.ne -o grammar.built.ts && jest --watch"
   },
