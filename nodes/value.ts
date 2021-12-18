@@ -31,8 +31,8 @@ interface GenericParamDefinition {
 }
 
 interface IntPayload { value: bigint }
-export const int = (pos: Position, { value }: IntPayload) =>
-  InstructionNode.create<IntPayload, {}>('int', pos, { value })
+export const int = (pos: Position, payload: IntPayload) =>
+  InstructionNode.create<IntPayload, {}>('int', pos, payload)
 
 InstructionNode.register<IntPayload, {}>('int', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createInt(value) }),
@@ -67,9 +67,10 @@ const parseEscapeSequences = (rawStr: string, pos: Position) => {
 
 interface StringPayload { value: string }
 interface StringOpts { uninterpretedValue: string }
-export const string = (pos: Position, { uninterpretedValue }: StringOpts) => InstructionNode.create<StringPayload, {}>('string', pos, {
-  value: parseEscapeSequences(uninterpretedValue, pos),
-})
+export const string = (pos: Position, { uninterpretedValue }: StringOpts) =>
+  InstructionNode.create<StringPayload, {}>('string', pos, {
+    value: parseEscapeSequences(uninterpretedValue, pos),
+  })
 
 InstructionNode.register<StringPayload, {}>('string', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createString(value) }),
@@ -77,8 +78,8 @@ InstructionNode.register<StringPayload, {}>('string', {
 })
 
 interface BooleanPayload { value: boolean }
-export const boolean = (pos: Position, { value }: BooleanPayload) =>
-  InstructionNode.create<BooleanPayload, {}>('boolean', pos, { value })
+export const boolean = (pos: Position, payload: BooleanPayload) =>
+  InstructionNode.create<BooleanPayload, {}>('boolean', pos, payload)
 
 InstructionNode.register<BooleanPayload, {}>('boolean', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createBoolean(value) }),
@@ -88,8 +89,8 @@ InstructionNode.register<BooleanPayload, {}>('boolean', {
 // TODO: Use genericParamDefList
 interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode }
 interface TagTypePayload { type: types.TagType }
-export const tag = (pos: Position, { genericParamDefList, typeNode }: TagPayload) =>
-  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, { genericParamDefList, typeNode })
+export const tag = (pos: Position, payload: TagPayload) =>
+  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, payload)
 
 InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   exec: (rt, { type }) => ({
@@ -113,8 +114,8 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
 interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null }
 interface RecordPayload { content: Map<string, RecordValueDescription> }
 interface RecordTypePayload { finalType: types.RecordType }
-export const record = (pos: Position, { content }: RecordPayload) =>
-  InstructionNode.create<RecordPayload, RecordTypePayload>('record', pos, { content })
+export const record = (pos: Position, payload: RecordPayload) =>
+  InstructionNode.create<RecordPayload, RecordTypePayload>('record', pos, payload)
 
 InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
   exec: (rt, { content, finalType }) => {
@@ -161,8 +162,8 @@ interface FunctionTypePayload {
   finalType: types.FunctionType,
   capturedStates: readonly string[]
 }
-export const function_ = (pos: Position, { params, body, maybeBodyTypeNode, purity, genericParamDefList }: FunctionPayload) =>
-  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, { params, body, maybeBodyTypeNode, purity, genericParamDefList })
+export const function_ = (pos: Position, payload: FunctionPayload) =>
+  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, payload)
 
 InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
   exec: (rt, { params, body, finalType, capturedStates }) => ({

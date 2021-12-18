@@ -33,7 +33,6 @@ const construct = {
       identifier: name,
       maybeTypeConstraintNode,
       identPos: DUMMY_POS,
-      typeConstraintPos: DUMMY_POS
     }),
 
   fn: ({ purity, paramTypeNodes, returnTypeNode, dependencies = [], body }: ConstructFnOpts) =>

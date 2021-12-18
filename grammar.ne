@@ -230,7 +230,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
       const [genericParamDefList] = genericDefListEntry ?? [[]]
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
       const fn = nodes.value.function_(DUMMY_POS, { params, body, maybeBodyTypeNode, purity: PURITY.none, genericParamDefList })
-      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
+      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(nameToken) })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
         nextExpr: nextNode,
@@ -424,7 +424,7 @@ pattern40
   -> userValueIdentifier (_ type):? {%
     ([identifier, maybeTypeNodeEntry]) => {
       const [, maybeTypeConstraintNode] = maybeTypeNodeEntry ?? []
-      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, maybeTypeConstraintNode, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
+      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, maybeTypeConstraintNode, identPos: DUMMY_POS })
     }
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     ([leftBracket,, destructureEntries, rightBracket]) => (

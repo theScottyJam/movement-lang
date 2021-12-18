@@ -384,6 +384,9 @@ describe('Pattern matching', () => {
       let obj #{ x #int } = { x: 2, y: 3 }
       print match obj { when { y: Y #int } then Y + 5; when { x: X } then X }
     `)[0].raw).toBe(8n)
+
+    expect(() => customTestRun('print match { x: 2 } { when { x: X, y: Y } then Y }'))
+      .toThrow('Could not auto-determine the type of this record field, please specify it with a type constraint.')
   })
 
   test('Pattern matching with basic primitives', () => {

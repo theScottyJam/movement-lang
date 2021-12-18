@@ -24,8 +24,8 @@ const mapMapValues = (map, mapFn) => (
 )
 
 interface SimpleTypePayload { typeName: string }
-export const simpleType = (pos: Position, { typeName }: SimpleTypePayload) =>
-  TypeNode.create<SimpleTypePayload>('simpleType', pos, { typeName })
+export const simpleType = (pos: Position, payload: SimpleTypePayload) =>
+  TypeNode.create<SimpleTypePayload>('simpleType', pos, payload)
 
 TypeNode.register<SimpleTypePayload>('simpleType', {
   typeCheck: (state, { pos, typeName }) => {
@@ -45,8 +45,8 @@ TypeNode.register<SimpleTypePayload>('simpleType', {
 })
 
 interface UserTypeLookupPayload { typeName: string }
-export const userTypeLookup = (pos: Position, { typeName }: UserTypeLookupPayload) =>
-  TypeNode.create<UserTypeLookupPayload>('userTypeLookup', pos, { typeName })
+export const userTypeLookup = (pos: Position, payload: UserTypeLookupPayload) =>
+  TypeNode.create<UserTypeLookupPayload>('userTypeLookup', pos, payload)
 
 TypeNode.register<UserTypeLookupPayload>('userTypeLookup', {
   typeCheck: (state, { pos, typeName }) => {
@@ -60,8 +60,8 @@ TypeNode.register<UserTypeLookupPayload>('userTypeLookup', {
 })
 
 interface EvaluateExprTypePayload { expr: AnyInstructionNode }
-export const evaluateExprType = (pos: Position, { expr }: EvaluateExprTypePayload) =>
-  TypeNode.create<EvaluateExprTypePayload>('evaluateExprType', pos, { expr })
+export const evaluateExprType = (pos: Position, payload: EvaluateExprTypePayload) =>
+  TypeNode.create<EvaluateExprTypePayload>('evaluateExprType', pos, payload)
 
 TypeNode.register<EvaluateExprTypePayload>('evaluateExprType', {
   typeCheck: (state, { pos, expr }) => {
@@ -78,8 +78,8 @@ TypeNode.register<EvaluateExprTypePayload>('evaluateExprType', {
 })
 
 interface RecordTypePayload { nameToTypeNode: Map<string, AnyTypeNode> }
-export const recordType = (pos: Position, { nameToTypeNode }: RecordTypePayload) =>
-  TypeNode.create<RecordTypePayload>('recordType', pos, { nameToTypeNode })
+export const recordType = (pos: Position, payload: RecordTypePayload) =>
+  TypeNode.create<RecordTypePayload>('recordType', pos, payload)
 
 TypeNode.register<RecordTypePayload>('recordType', {
   typeCheck: (state, { nameToTypeNode }) => {
@@ -102,15 +102,15 @@ interface FunctionTypePayload {
   readonly paramTypeNodes: AnyTypeNode[]
   readonly bodyTypeNode: AnyTypeNode
 }
-export const functionType = (pos: Position, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode }: FunctionTypePayload) =>
-  TypeNode.create<FunctionTypePayload>('functionType', pos, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
+export const functionType = (pos: Position, payload: FunctionTypePayload) =>
+  TypeNode.create<FunctionTypePayload>('functionType', pos, payload)
 
 TypeNode.register<FunctionTypePayload>('functionType', {
   typeCheck: (state, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode }) => {
     const constraints = []
     const respStates = []
     for (const { identifier, constraintNode, identPos } of genericParamDefList) {
-      const { respState, type: constraint__ } = TypeNode.typeCheck(constraintNode, state) //!! RespState
+      const { respState, type: constraint__ } = TypeNode.typeCheck(constraintNode, state)
       respStates.push(respState)
       const constraint_ = Type.assertIsConcreteType(constraint__) // FIXME: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function type definition.
       const constraint = Type.createParameterType({
@@ -140,8 +140,8 @@ TypeNode.register<FunctionTypePayload>('functionType', {
 
 // Mainly intended as a convenience for constructing the stdLib.
 interface nodeFromTypeGetterFnPayload { typeGetter: (state: TypeState) => AnyType }
-export const nodeFromTypeGetter = (pos: Position, { typeGetter }: nodeFromTypeGetterFnPayload) =>
-  TypeNode.create<nodeFromTypeGetterFnPayload>('customTypeNode', pos, { typeGetter })
+export const nodeFromTypeGetter = (pos: Position, payload: nodeFromTypeGetterFnPayload) =>
+  TypeNode.create<nodeFromTypeGetterFnPayload>('customTypeNode', pos, payload)
 
 TypeNode.register<nodeFromTypeGetterFnPayload>('customTypeNode', {
   typeCheck: (state, { typeGetter }) => {

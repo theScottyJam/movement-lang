@@ -76,8 +76,8 @@ InstructionNode.register<BeginBlockPayload, {}>('beginBlock', {
 })
 
 interface BlockPayload { content: AnyInstructionNode }
-export const block = (pos: Position, { content }: BlockPayload) =>
-  InstructionNode.create<BlockPayload, {}>('block', pos, { content })
+export const block = (pos: Position, payload: BlockPayload) =>
+  InstructionNode.create<BlockPayload, {}>('block', pos, payload)
 
 InstructionNode.register<BlockPayload, {}>('block', {
   exec: (rt, { content }) => {
@@ -127,8 +127,8 @@ InstructionNode.register<NoopPayload, {}>('noop', {
 })
 
 interface PrintPayload { r: AnyInstructionNode }
-export const print = (pos: Position, { r }: PrintPayload) =>
-  InstructionNode.create<PrintPayload, {}>('print', pos, { r })
+export const print = (pos: Position, payload: PrintPayload) =>
+  InstructionNode.create<PrintPayload, {}>('print', pos, payload)
 
 InstructionNode.register<PrintPayload, {}>('print', {
   exec: (rt, { r }) => {
@@ -140,8 +140,8 @@ InstructionNode.register<PrintPayload, {}>('print', {
 })
 
 interface PrintTypePayload { r: AnyInstructionNode }
-export const printType = (pos: Position, { r }: PrintTypePayload) =>
-  InstructionNode.create<PrintTypePayload, {}>('printType', pos, { r })
+export const printType = (pos: Position, payload: PrintTypePayload) =>
+  InstructionNode.create<PrintTypePayload, {}>('printType', pos, payload)
 
 InstructionNode.register<PrintTypePayload, {}>('printType', {
   exec: (rt, { r }) => InstructionNode.exec(r, rt),
@@ -153,8 +153,8 @@ InstructionNode.register<PrintTypePayload, {}>('printType', {
 })
 
 interface EqualsPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const equals = (pos: Position, { l, r }: EqualsPayload) =>
-  InstructionNode.create<EqualsPayload, {}>('equals', pos, { l, r })
+export const equals = (pos: Position, payload: EqualsPayload) =>
+  InstructionNode.create<EqualsPayload, {}>('equals', pos, payload)
 
 InstructionNode.register<EqualsPayload, {}>('equals', {
   exec: (rt, { l, r }) => {
@@ -175,8 +175,8 @@ InstructionNode.register<EqualsPayload, {}>('equals', {
 })
 
 interface NotEqualPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const notEqual = (pos: Position, { l, r }: NotEqualPayload) =>
-  InstructionNode.create<NotEqualPayload, {}>('notEqual', pos, { l, r })
+export const notEqual = (pos: Position, payload: NotEqualPayload) =>
+  InstructionNode.create<NotEqualPayload, {}>('notEqual', pos, payload)
 
 InstructionNode.register<NotEqualPayload, {}>('notEqual', {
   exec: (rt, { l, r }) => {
@@ -197,8 +197,8 @@ InstructionNode.register<NotEqualPayload, {}>('notEqual', {
 })
 
 interface AddPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const add = (pos: Position, { l, r }: AddPayload) =>
-  InstructionNode.create<AddPayload, {}>('add', pos, { l, r })
+export const add = (pos: Position, payload: AddPayload) =>
+  InstructionNode.create<AddPayload, {}>('add', pos, payload)
 
 InstructionNode.register<AddPayload, {}>('add', {
   exec: (rt, { l, r }) => {
@@ -221,8 +221,8 @@ InstructionNode.register<AddPayload, {}>('add', {
 })
 
 interface SubtractPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const subtract = (pos: Position, { l, r }: SubtractPayload) =>
-  InstructionNode.create<SubtractPayload, {}>('subtract', pos, { l, r })
+export const subtract = (pos: Position, payload: SubtractPayload) =>
+  InstructionNode.create<SubtractPayload, {}>('subtract', pos, payload)
 
 InstructionNode.register<SubtractPayload, {}>('subtract', {
   exec: (rt, { l, r }) => {
@@ -245,8 +245,8 @@ InstructionNode.register<SubtractPayload, {}>('subtract', {
 })
 
 interface MultiplyPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const multiply = (pos: Position, { l, r }: MultiplyPayload) =>
-  InstructionNode.create<MultiplyPayload, {}>('multiply', pos, { l, r })
+export const multiply = (pos: Position, payload: MultiplyPayload) =>
+  InstructionNode.create<MultiplyPayload, {}>('multiply', pos, payload)
 
 InstructionNode.register<MultiplyPayload, {}>('multiply', {
   exec: (rt, { l, r }) => {
@@ -269,8 +269,8 @@ InstructionNode.register<MultiplyPayload, {}>('multiply', {
 })
 
 interface PowerPayload { l: AnyInstructionNode, r: AnyInstructionNode }
-export const power = (pos: Position, { l, r }: PowerPayload) =>
-  InstructionNode.create<PowerPayload, {}>('power', pos, { l, r })
+export const power = (pos: Position, payload: PowerPayload) =>
+  InstructionNode.create<PowerPayload, {}>('power', pos, payload)
 
 InstructionNode.register<PowerPayload, {}>('power', {
   exec: (rt, { l, r }) => {
@@ -293,8 +293,8 @@ InstructionNode.register<PowerPayload, {}>('power', {
 })
 
 interface PropertyAccessPayload { l: AnyInstructionNode, identifier: string }
-export const propertyAccess = (pos: Position, { l, identifier }: PropertyAccessPayload) =>
-  InstructionNode.create<PropertyAccessPayload, {}>('propertyAccess', pos, { l, identifier })
+export const propertyAccess = (pos: Position, payload: PropertyAccessPayload) =>
+  InstructionNode.create<PropertyAccessPayload, {}>('propertyAccess', pos, payload)
 
 InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
   exec: (rt, { l, identifier }) => {
@@ -314,8 +314,8 @@ InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
 
 interface TypeAssertionPayload { expr: AnyInstructionNode, typeNode: AnyTypeNode, typePos: Position, operatorAndTypePos: Position }
 interface TypeAssertionTypePayload { finalType: AnyType }
-export const typeAssertion = (pos: Position, { expr, typeNode, typePos, operatorAndTypePos }: TypeAssertionPayload) =>
-  InstructionNode.create<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', pos, { expr, typePos, typeNode, operatorAndTypePos })
+export const typeAssertion = (pos: Position, payload: TypeAssertionPayload) =>
+  InstructionNode.create<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', pos, payload)
 
 InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', {
   exec: (rt, { expr, finalType }) => {
@@ -341,8 +341,8 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
 interface GenericParam { typeNode: AnyTypeNode, pos: Position }
 interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
 // FIXME: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
-export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokePayload) =>
-  InstructionNode.create<InvokePayload, {}>('invoke', pos, { fnExpr, genericParams, args, callWithPurity: PURITY.pure })
+export const invoke = (pos: Position, payload: InvokePayload) =>
+  InstructionNode.create<InvokePayload, {}>('invoke', pos, { ...payload, callWithPurity: PURITY.pure })
 
 InstructionNode.register<InvokePayload, {}>('invoke', {
   exec: (outerRt, { fnExpr, args }) => {
@@ -436,8 +436,8 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
 })
 
 interface CallWithPermissionsPayload { purity: ValueOf<typeof PURITY>, invokeExpr: AnyInstructionNode }
-export const callWithPermissions = (pos: Position, { purity, invokeExpr }: CallWithPermissionsPayload) =>
-  InstructionNode.create<CallWithPermissionsPayload, {}>('callWithPermissions', pos, { purity, invokeExpr })
+export const callWithPermissions = (pos: Position, payload: CallWithPermissionsPayload) =>
+  InstructionNode.create<CallWithPermissionsPayload, {}>('callWithPermissions', pos, payload)
 
 InstructionNode.register<CallWithPermissionsPayload, {}>('callWithPermissions', {
   exec: (rt, { invokeExpr }) => InstructionNode.exec(invokeExpr, rt),
@@ -451,8 +451,8 @@ InstructionNode.register<CallWithPermissionsPayload, {}>('callWithPermissions', 
 })
 
 interface ReturnPayload { value: AnyInstructionNode }
-export const return_ = (pos: Position, { value }: ReturnPayload) =>
-  InstructionNode.create<ReturnPayload, {}>('return', pos, { value })
+export const return_ = (pos: Position, payload: ReturnPayload) =>
+  InstructionNode.create<ReturnPayload, {}>('return', pos, payload)
 
 InstructionNode.register<ReturnPayload, {}>('return', {
   exec: (rt, { value }) => {
@@ -468,8 +468,8 @@ InstructionNode.register<ReturnPayload, {}>('return', {
 })
 
 interface BranchPayload { condition: AnyInstructionNode, ifSo: AnyInstructionNode, ifNot: AnyInstructionNode }
-export const branch = (pos: Position, { condition, ifSo, ifNot }: BranchPayload) =>
-  InstructionNode.create<BranchPayload, {}>('branch', pos, { condition, ifSo, ifNot })
+export const branch = (pos: Position, payload: BranchPayload) =>
+  InstructionNode.create<BranchPayload, {}>('branch', pos, payload)
 
 InstructionNode.register<BranchPayload, {}>('branch', {
   exec: (rt, { condition, ifSo, ifNot }) => {
@@ -492,8 +492,8 @@ InstructionNode.register<BranchPayload, {}>('branch', {
 })
 
 interface MatchPayload { matchValue: AnyInstructionNode, matchArms: { pattern: AnyAssignmentTargetNode, body: AnyInstructionNode }[] }
-export const match = (pos: Position, { matchValue, matchArms }: MatchPayload) =>
-  InstructionNode.create<MatchPayload, {}>('match', pos, { matchValue, matchArms })
+export const match = (pos: Position, payload: MatchPayload) =>
+  InstructionNode.create<MatchPayload, {}>('match', pos, payload)
 
 InstructionNode.register<MatchPayload, {}>('match', {
   exec: (rt, { matchValue, matchArms }) => {
@@ -589,8 +589,8 @@ InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
 // FIXME: Is there a better way to handle this? Probably not.
 interface ImportMetaOpts { from: string, childNode: AnyInstructionNode }
 interface ImportMetaPayload { dependency: string, childNode: AnyInstructionNode }
-export const importMeta = (pos: Position, { from: from_, childNode }: ImportMetaOpts) =>
-  InstructionNode.create<ImportMetaPayload, {}>('importMeta', pos, { dependency: from_, childNode })
+export const importMeta = (pos: Position, { from: dependency, childNode }: ImportMetaOpts) =>
+  InstructionNode.create<ImportMetaPayload, {}>('importMeta', pos, { dependency, childNode })
 
 InstructionNode.register<ImportMetaPayload, {}>('importMeta', {
   exec: (rt, { childNode }) => InstructionNode.exec(childNode, rt),
@@ -625,8 +625,8 @@ InstructionNode.register<{}, {}>('stdLib', {
 })
 
 interface TypeAliasPayload { name: string, typeNode: AnyTypeNode, definedWithin: AnyInstructionNode }
-export const typeAlias = (pos: Position, { name, typeNode, definedWithin }: TypeAliasPayload) =>
-  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, { name, typeNode, definedWithin })
+export const typeAlias = (pos: Position, payload: TypeAliasPayload) =>
+  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, payload)
 
 InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
   exec: (rt, { definedWithin }) => InstructionNode.exec(definedWithin, rt),
@@ -641,8 +641,8 @@ InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
 })
 
 interface ApplyTagPayload { tag: AnyInstructionNode, content: AnyInstructionNode }
-export const applyTag = (pos: Position, { tag, content }: ApplyTagPayload) =>
-  InstructionNode.create<ApplyTagPayload, {}>('applyTag', pos, { tag, content })
+export const applyTag = (pos: Position, payload: ApplyTagPayload) =>
+  InstructionNode.create<ApplyTagPayload, {}>('applyTag', pos, payload)
 
 InstructionNode.register<ApplyTagPayload, {}>('applyTag', {
   exec: (rt, { tag, content }) => {

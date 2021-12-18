@@ -25,21 +25,18 @@ type TypeState = TypeState.TypeState
 type RespState = RespState.RespState
 type AnyType = Type.AnyType
 
-type TypeGetter = (TypeState, Position) => AnyType
-
 const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
 interface BindPayload {
   readonly identifier: string
   readonly maybeTypeConstraintNode?: AnyTypeNode | null
   readonly identPos: Position
-  readonly typeConstraintPos: Position
 }
 interface BindTypePayload {
   readonly typeConstraint: AnyType
 }
-export const bind = (pos: Position, { identifier, maybeTypeConstraintNode, identPos, typeConstraintPos }: BindPayload) =>
-  AssignmentTargetNode.create<BindPayload, BindTypePayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos, typeConstraintPos })
+export const bind = (pos: Position, { identifier, maybeTypeConstraintNode, identPos }: BindPayload) =>
+  AssignmentTargetNode.create<BindPayload, BindTypePayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos })
 
 AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
   exec: (rt, { identifier, typeConstraint }, { incomingValue, allowFailure = false }) => {
@@ -49,9 +46,9 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
     }
     return [{ identifier, value: incomingValue }]
   },
-  typeCheck: (state, { identifier, maybeTypeConstraintNode, typeConstraintPos, identPos }, { incomingType, allowWidening = false, export: export_ = false }) => {
+  typeCheck: (state, { identifier, maybeTypeConstraintNode, identPos }, { incomingType, allowWidening = false, export: export_ = false }) => {
     const maybeTypeConstraintResp = maybeTypeConstraintNode ? TypeNode.typeCheck(maybeTypeConstraintNode, state) : null
-    if (incomingType === AssignmentTargetNode.missingType && !maybeTypeConstraintResp.type) {
+    if (incomingType === AssignmentTargetNode.missingType && !maybeTypeConstraintResp) {
       throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
     }
     if (maybeTypeConstraintResp && incomingType !== AssignmentTargetNode.missingType && !Type.isTypeAssignableTo(incomingType, maybeTypeConstraintResp.type)) {
