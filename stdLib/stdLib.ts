@@ -41,7 +41,6 @@ const construct = {
       params: paramTypeNodes.map((typeNode, i) => construct.bind('p' + i, typeNode)),
       body: construct._customFnBody({ argCount: paramTypeNodes.length, returnTypeNode, dependencies, fn: body }),
       maybeBodyTypeNode: null,
-      bodyTypePos: DUMMY_POS,
       purity,
       genericParamDefList: [],
     }),
@@ -82,7 +81,7 @@ const construct = {
     nodes.value.record(DUMMY_POS, {
       content: new Map(
         Object.entries(mapping)
-          .map(([key, node]) => [key, { target: node, requiredTypeGetter: null, typeGetterPos: DUMMY_POS }]
+          .map(([key, node]) => [key, { target: node, maybeRequiredTypeNode: null }]
       )),
     }),
 
@@ -91,7 +90,6 @@ const construct = {
     typeNode: nodes.type.nodeFromTypeGetter(DUMMY_POS, {
       typeGetter: () => types.createInternal()
     }),
-    typePos: DUMMY_POS,
   }),
 
   simpleType: typeName => nodes.type.simpleType(DUMMY_POS, { typeName })

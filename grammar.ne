@@ -229,7 +229,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
     ([export_, function_,, nameToken,, genericDefListEntry, params,, bodyTypeNodeEntry, body]) => {
       const [genericParamDefList] = genericDefListEntry ?? [[]]
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
-      const fn = nodes.value.function_(DUMMY_POS, { params, body, maybeBodyTypeNode, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
+      const fn = nodes.value.function_(DUMMY_POS, { params, body, maybeBodyTypeNode, purity: PURITY.none, genericParamDefList })
       const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
@@ -242,7 +242,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
     ([export_, ,, ,, nameToken,, ,, typeNode]) => (
       !!export_
         ? nextNode => { throw new Error('Not implemented') }
-        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, typeNode, definedWithin: nextNode, typePos: DUMMY_POS })
+        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, typeNode, definedWithin: nextNode })
     )
   %}
 
@@ -299,7 +299,7 @@ expr10
       const purity = getsEntry == null ? PURITY.pure : PURITY.gets
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
-      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
+      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, purity, genericParamDefList })
     }
   %} | expr15 {% id %}
 
@@ -394,7 +394,7 @@ expr100
   %} | "tag" _ (genericParamDefList _):? type {%
     ([,, genericParamDefList_, typeNode]) => {
       const [genericParamDefList] = genericParamDefList_ ?? [null]
-      return nodes.value.tag(DUMMY_POS, { genericParamDefList, typeNode, typePos: DUMMY_POS })
+      return nodes.value.tag(DUMMY_POS, { genericParamDefList, typeNode })
     }
   %}
 
@@ -481,8 +481,7 @@ genericParamDefList
     ([,, entries]) => (
       entries.map(([identifier,, typeEntry]) => {
         const [,, constraintNode = nodes.type.simpleType(DUMMY_POS, { typeName: '#unknown' })] = typeEntry ?? []
-        // FIXME: It's possible that after "pos" stuuff has been refactored, this constraintPos will become unused
-        return { identifier: identifier.value, constraintNode, identPos: asPos(identifier), constraintPos: DUMMY_POS }
+        return { identifier: identifier.value, constraintNode, identPos: asPos(identifier) }
       })
     )
   %}

@@ -25,10 +25,9 @@ type AnyType = Type.AnyType
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 
 interface GenericParamDefinition {
-  identifier: string
-  constraintNode: AnyTypeNode
-  identPos: Position
-  constraintPos: Position
+  readonly identifier: string
+  readonly constraintNode: AnyTypeNode
+  readonly identPos: Position
 }
 
 interface IntPayload { value: bigint }
@@ -87,11 +86,10 @@ InstructionNode.register<BooleanPayload, {}>('boolean', {
 })
 
 // TODO: Use genericParamDefList
-// FIXME: typePos may become unused after `pos` refactor
-interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode, typePos: Position }
+interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode }
 interface TagTypePayload { type: types.TagType }
-export const tag = (pos: Position, { genericParamDefList, typeNode, typePos }: TagPayload) =>
-  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, { genericParamDefList, typeNode, typePos })
+export const tag = (pos: Position, { genericParamDefList, typeNode }: TagPayload) =>
+  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, { genericParamDefList, typeNode })
 
 InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   exec: (rt, { type }) => ({
@@ -112,8 +110,7 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   },
 })
 
-// FIXME: typeGetterPos may not be required after `pos` refactor
-interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null, typeGetterPos: Position }
+interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null }
 interface RecordPayload { content: Map<string, RecordValueDescription> }
 interface RecordTypePayload { finalType: types.RecordType }
 export const record = (pos: Position, { content }: RecordPayload) =>
@@ -157,7 +154,6 @@ interface FunctionPayload {
   params: AnyAssignmentTargetNode[]
   body: AnyInstructionNode
   maybeBodyTypeNode: AnyTypeNode | null
-  bodyTypePos: Position // FIXME - this might become unused after the `pos` refactor
   purity: purityTypes
   genericParamDefList: GenericParamDefinition[]
 }
@@ -165,8 +161,8 @@ interface FunctionTypePayload {
   finalType: types.FunctionType,
   capturedStates: readonly string[]
 }
-export const function_ = (pos: Position, { params, body, maybeBodyTypeNode, bodyTypePos, purity, genericParamDefList }: FunctionPayload) =>
-  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, { params, body, maybeBodyTypeNode, bodyTypePos, purity, genericParamDefList })
+export const function_ = (pos: Position, { params, body, maybeBodyTypeNode, purity, genericParamDefList }: FunctionPayload) =>
+  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, { params, body, maybeBodyTypeNode, purity, genericParamDefList })
 
 InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
   exec: (rt, { params, body, finalType, capturedStates }) => ({

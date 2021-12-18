@@ -98,7 +98,6 @@ interface FunctionTypePayload {
     identifier: string,
     constraintNode: AnyTypeNode,
     identPos: Position,
-    constraintPos: Position,
   }[]
   readonly paramTypeNodes: AnyTypeNode[]
   readonly bodyTypeNode: AnyTypeNode

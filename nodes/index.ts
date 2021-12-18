@@ -42,8 +42,6 @@ const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Toke
 
 const top = <T>(array: readonly T[]): T => array[array.length - 1]
 
-// FIXME: There's stuff in grammer.ne that's reaching through other node's data, to calculate dependencies.
-
 interface RootOpts { content: AnyInstructionNode, dependencies: readonly string[] }
 export const root = ({ content, dependencies }: RootOpts) => AstRoot.create({
   dependencies: [...new Set(dependencies)],
@@ -66,7 +64,6 @@ interface BeginBlockPayload { content: AnyInstructionNode }
 export const beginBlock = (pos: Position, content: AnyInstructionNode) =>
   InstructionNode.create<BeginBlockPayload, {}>('beginBlock', pos, { content })
 
-// FIXME: Maybe I want to pass the `pos` arg in via state, or elsewhere, instead of pretending its part of the payload.
 InstructionNode.register<BeginBlockPayload, {}>('beginBlock', {
   exec: (rt, { content }) => InstructionNode.exec(content, rt),
   typeCheck: (state, { pos, content }) => {
@@ -627,10 +624,9 @@ InstructionNode.register<{}, {}>('stdLib', {
   typeCheck: state => ({ respState: RespState.create(), type: state.stdLibShape }),
 })
 
-// FIXME: typePos may become unused after the `pos` refactor
-interface TypeAliasPayload { name: string, typeNode: AnyTypeNode, definedWithin: AnyInstructionNode, typePos: Position }
-export const typeAlias = (pos: Position, { name, typeNode, definedWithin, typePos }: TypeAliasPayload) =>
-  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, { name, typeNode, definedWithin, typePos })
+interface TypeAliasPayload { name: string, typeNode: AnyTypeNode, definedWithin: AnyInstructionNode }
+export const typeAlias = (pos: Position, { name, typeNode, definedWithin }: TypeAliasPayload) =>
+  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, { name, typeNode, definedWithin })
 
 InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
   exec: (rt, { definedWithin }) => InstructionNode.exec(definedWithin, rt),
