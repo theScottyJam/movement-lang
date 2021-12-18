@@ -9,37 +9,38 @@ import * as Value from '../language/Value'
 import * as values from '../language/values'
 import * as nodes from '../nodes'
 import * as InstructionNode from '../nodes/variants/InstructionNode'
+import * as TypeNode from '../nodes/variants/TypeNode'
 import { PURITY } from '../language/constants'
 import * as Runtime from '../language/Runtime'
 
 const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
+type AnyTypeNode = TypeNode.AnyTypeNode
+
 type CustomFnBodyCallback = (rt: Runtime.Runtime, ...args: Value.AnyValue[]) => Value.AnyValue
 
-type TypeGetter = (state: TypeState.TypeState) => Type.AnyType
-
 interface ConstructFnOpts {
-  readonly paramTypeGetters: readonly TypeGetter[]
-  readonly getReturnType: TypeGetter
+  readonly paramTypeNodes: readonly AnyTypeNode[]
+  readonly returnTypeNode: AnyTypeNode
   readonly purity: typeof PURITY[keyof typeof PURITY]
   readonly dependencies?: string[],
   readonly body: CustomFnBodyCallback
 }
 
 const construct = {
-  bind: (name: string, getTypeConstraint: TypeGetter = () => null) =>
+  bind: (name: string, maybeTypeConstraintNode: AnyTypeNode = null) =>
     nodes.assignmentTarget.bind(DUMMY_POS, {
       identifier: name,
-      getTypeConstraint: getTypeConstraint,
+      maybeTypeConstraintNode,
       identPos: DUMMY_POS,
       typeConstraintPos: DUMMY_POS
     }),
 
-  fn: ({ purity, paramTypeGetters, getReturnType, dependencies = [], body }: ConstructFnOpts) =>
+  fn: ({ purity, paramTypeNodes, returnTypeNode, dependencies = [], body }: ConstructFnOpts) =>
     nodes.value.function_(DUMMY_POS, {
-      params: paramTypeGetters.map((typeGetter, i) => construct.bind('p' + i, typeGetter)),
-      body: construct._customFnBody({ argCount: paramTypeGetters.length, getReturnType, dependencies, fn: body }),
-      getBodyType: null,
+      params: paramTypeNodes.map((typeNode, i) => construct.bind('p' + i, typeNode)),
+      body: construct._customFnBody({ argCount: paramTypeNodes.length, returnTypeNode, dependencies, fn: body }),
+      maybeBodyTypeNode: null,
       bodyTypePos: DUMMY_POS,
       purity,
       genericParamDefList: [],
@@ -49,7 +50,7 @@ const construct = {
     const jsFnBodyName = 'jsFnBody:' + Math.random().toString().slice(2, 7)
     interface InstructionNodePayload {
       readonly argCount: number
-      readonly getReturnType: TypeGetter
+      readonly returnTypeNode: AnyTypeNode
       readonly dependencies: string[]
       readonly fn: CustomFnBodyCallback
     }
@@ -61,11 +62,20 @@ const construct = {
           value: fn(rt, ...args),
         }
       },
-      typeCheck: (state, { getReturnType, dependencies }) => ({ respState: RespState.create({ outerFnVars: dependencies }), type: getReturnType(state) }),
+      typeCheck: (state, { returnTypeNode, dependencies }) => {
+        const { respState, type } = TypeNode.typeCheck(returnTypeNode, state)
+        return {
+          respState: RespState.merge(
+            respState,
+            RespState.create({ outerFnVars: dependencies }),
+          ),
+          type
+        }
+      },
     })
 
-    return ({ argCount, getReturnType, dependencies, fn }: InstructionNodePayload) =>
-      InstructionNode.create<InstructionNodePayload, {}>(jsFnBodyName, DUMMY_POS, { argCount, getReturnType, dependencies, fn })
+    return ({ argCount, returnTypeNode, dependencies, fn }: InstructionNodePayload) =>
+      InstructionNode.create<InstructionNodePayload, {}>(jsFnBodyName, DUMMY_POS, { argCount, returnTypeNode, dependencies, fn })
     })(),
 
   record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
@@ -78,9 +88,13 @@ const construct = {
 
   internalTag: () => nodes.value.tag(DUMMY_POS, {
     genericParamDefList: [],
-    getType: () => types.createInternal(),
+    typeNode: nodes.type.nodeFromTypeGetter(DUMMY_POS, {
+      typeGetter: () => types.createInternal()
+    }),
     typePos: DUMMY_POS,
   }),
+
+  simpleType: typeName => nodes.type.simpleType(DUMMY_POS, { typeName })
 }
 
 const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstructionNode } = () => {
@@ -92,14 +106,16 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
   // TODO: I should support more than ints
   stdLibDef.Mutable = construct.record((() => {
     const MutableDef: any = {}
-    const mutableTagType = (state: TypeState.TypeState, varName: string) =>
-      Type.getTypeMatchingDescendants(TypeState.lookupVar(state, varName).type, DUMMY_POS)
+    const mutableTagTypeNode = (varName: string) => nodes.type.nodeFromTypeGetter(DUMMY_POS, {
+      typeGetter: (state: TypeState.TypeState) =>
+        Type.getTypeMatchingDescendants(TypeState.lookupVar(state, varName).type, DUMMY_POS)
+    })
     
     MutableDef.create = construct.fn({
       purity: PURITY.pure,
-      paramTypeGetters: [() => types.createInt()],
+      paramTypeNodes: [construct.simpleType('#int')],
       dependencies: ['MutableTag'],
-      getReturnType: state => mutableTagType(state, 'MutableTag'),
+      returnTypeNode: mutableTagTypeNode('MutableTag'),
       body: (rt, content) => {
         const tag = Runtime.lookupVar(rt, 'MutableTag')
         const value = values.createInternal({ mutable: content })
@@ -110,16 +126,16 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
     MutableDef.get_ = construct.fn({
       purity: PURITY.pure,
       dependencies: ['MutableTag'],
-      paramTypeGetters: [state => mutableTagType(state, 'MutableTag')],
-      getReturnType: () => types.createInt(),
+      paramTypeNodes: [mutableTagTypeNode('MutableTag')],
+      returnTypeNode: construct.simpleType('#int'),
       body: (rt, taggedItem) => (taggedItem.raw as any).raw.mutable as values.IntValue,
     })
 
     MutableDef.set = construct.fn({
       purity: PURITY.none,
       dependencies: ['MutableTag'],
-      paramTypeGetters: [state => mutableTagType(state, 'MutableTag'), () => types.createInt()],
-      getReturnType: () => types.createInt(),
+      paramTypeNodes: [mutableTagTypeNode('MutableTag'), construct.simpleType('#int')],
+      returnTypeNode: construct.simpleType('#int'),
       body: (rt, taggedItem, newValue) => {
         (taggedItem.raw as any).raw.mutable = newValue
         return values.createUnit()

@@ -1,6 +1,7 @@
 import type { Token } from 'moo'
 import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
 import * as InstructionNode from './variants/InstructionNode';
+import * as TypeNode from './variants/TypeNode';
 import {
   assertRawRecordValue,
   assertRecordInnerDataType,
@@ -17,6 +18,7 @@ import * as types from '../language/types'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
+type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
 type TypeState = TypeState.TypeState
@@ -29,15 +31,15 @@ const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Toke
 
 interface BindPayload {
   readonly identifier: string
-  readonly getTypeConstraint?: TypeGetter
+  readonly maybeTypeConstraintNode?: AnyTypeNode | null
   readonly identPos: Position
   readonly typeConstraintPos: Position
 }
 interface BindTypePayload {
   readonly typeConstraint: AnyType
 }
-export const bind = (pos: Position, { identifier, getTypeConstraint, identPos, typeConstraintPos }: BindPayload) =>
-  AssignmentTargetNode.create<BindPayload, BindTypePayload>('bind', pos, { identifier, getTypeConstraint, identPos, typeConstraintPos })
+export const bind = (pos: Position, { identifier, maybeTypeConstraintNode, identPos, typeConstraintPos }: BindPayload) =>
+  AssignmentTargetNode.create<BindPayload, BindTypePayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos, typeConstraintPos })
 
 AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
   exec: (rt, { identifier, typeConstraint }, { incomingValue, allowFailure = false }) => {
@@ -47,34 +49,42 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
     }
     return [{ identifier, value: incomingValue }]
   },
-  typeCheck: (state, { identifier, getTypeConstraint, typeConstraintPos, identPos }, { incomingType, allowWidening = false, export: export_ = false }) => {
-    const typeConstraint = getTypeConstraint ? getTypeConstraint(state, typeConstraintPos) : null
-    if (incomingType === AssignmentTargetNode.missingType && !typeConstraint) throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
-    if (typeConstraint && incomingType !== AssignmentTargetNode.missingType && !Type.isTypeAssignableTo(incomingType, typeConstraint)) {
+  typeCheck: (state, { identifier, maybeTypeConstraintNode, typeConstraintPos, identPos }, { incomingType, allowWidening = false, export: export_ = false }) => {
+    const maybeTypeConstraintResp = maybeTypeConstraintNode ? TypeNode.typeCheck(maybeTypeConstraintNode, state) : null
+    if (incomingType === AssignmentTargetNode.missingType && !maybeTypeConstraintResp.type) {
+      throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
+    }
+    if (maybeTypeConstraintResp && incomingType !== AssignmentTargetNode.missingType && !Type.isTypeAssignableTo(incomingType, maybeTypeConstraintResp.type)) {
       if (!allowWidening) {
-        throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(typeConstraint)}".`, DUMMY_POS)
-      } else if (allowWidening && !Type.isTypeAssignableTo(typeConstraint, incomingType)) {
-        throw new SemanticError(`Attempted to change a type from "${Type.repr(incomingType)}" to type "${Type.repr(typeConstraint)}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
+        throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(maybeTypeConstraintResp.type)}".`, DUMMY_POS)
+      } else if (allowWidening && !Type.isTypeAssignableTo(maybeTypeConstraintResp.type, incomingType)) {
+        throw new SemanticError(`Attempted to change a type from "${Type.repr(incomingType)}" to type "${Type.repr(maybeTypeConstraintResp.type)}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
       }
     }
-    const finalType = typeConstraint ? typeConstraint : incomingType
+    const finalType = maybeTypeConstraintResp ? maybeTypeConstraintResp.type : incomingType
     if (finalType === AssignmentTargetNode.missingType) throw new Error('INTERNAL ERROR')
     return {
-      respState: RespState.create({
-        declarations: [{ identifier, type: finalType, identPos }],
-        moduleShape: export_
-          ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
-          : types.createRecord({ nameToType: new Map() }),
-      }),
+      respState: RespState.merge(
+        ...(maybeTypeConstraintResp ? [maybeTypeConstraintResp.respState] : []),
+        RespState.create({
+          declarations: [{ identifier, type: finalType, identPos }],
+          moduleShape: export_
+            ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
+            : types.createRecord({ nameToType: new Map() }),
+        })
+      ),
     }
   },
-  contextlessTypeCheck: (state, { pos, identifier, getTypeConstraint, identPos, typeConstraintPos }) => {
-    if (!getTypeConstraint) throw new SemanticError('All function parameters must have a declared type', pos)
-    const typeConstraint = getTypeConstraint(state, typeConstraintPos)
+  contextlessTypeCheck: (state, { pos, identifier, maybeTypeConstraintNode, identPos }) => {
+    if (!maybeTypeConstraintNode) throw new SemanticError('All function parameters must have a declared type', pos)
+    const typeConstraintResp = TypeNode.typeCheck(maybeTypeConstraintNode, state)
     return {
-      respState: RespState.create({ declarations: [{ identifier, type: typeConstraint, identPos }] }),
-      type: typeConstraint,
-      typePayload: { typeConstraint }
+      respState: RespState.merge(
+        typeConstraintResp.respState,
+        RespState.create({ declarations: [{ identifier, type: typeConstraintResp.type, identPos }] })
+      ),
+      type: typeConstraintResp.type,
+      typePayload: { typeConstraint: typeConstraintResp.type }
     }
   }
 })

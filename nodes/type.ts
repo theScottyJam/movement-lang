@@ -138,3 +138,17 @@ TypeNode.register<FunctionTypePayload>('functionType', {
     }
   },
 })
+
+// Mainly intended as a convenience for constructing the stdLib.
+interface nodeFromTypeGetterFnPayload { typeGetter: (state: TypeState) => AnyType }
+export const nodeFromTypeGetter = (pos: Position, { typeGetter }: nodeFromTypeGetterFnPayload) =>
+  TypeNode.create<nodeFromTypeGetterFnPayload>('customTypeNode', pos, { typeGetter })
+
+TypeNode.register<nodeFromTypeGetterFnPayload>('customTypeNode', {
+  typeCheck: (state, { typeGetter }) => {
+    return {
+      respState: RespState.create(),
+      type: typeGetter(state)
+    }
+  },
+})

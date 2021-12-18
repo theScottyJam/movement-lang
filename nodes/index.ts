@@ -3,6 +3,7 @@ import type { Token } from 'moo'
 import * as AstRoot from './variants/Root';
 import * as InstructionNode from './variants/InstructionNode';
 import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
+import * as TypeNode from './variants/TypeNode';
 import {
   assertBigInt,
   assertRawRecordValue,
@@ -28,13 +29,13 @@ export * as type from './type'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
+type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
 type TypeState = TypeState.TypeState
 type RespState = RespState.RespState
 type AnyType = Type.AnyType
 
-type TypeGetter = (TypeState, Position) => AnyType
 type ValueOf<T> = T[keyof T]
 
 const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
@@ -314,10 +315,10 @@ InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
   },
 })
 
-interface TypeAssertionPayload { expr: AnyInstructionNode, getType: TypeGetter, typePos: Position, operatorAndTypePos: Position }
+interface TypeAssertionPayload { expr: AnyInstructionNode, typeNode: AnyTypeNode, typePos: Position, operatorAndTypePos: Position }
 interface TypeAssertionTypePayload { finalType: AnyType }
-export const typeAssertion = (pos: Position, { expr, getType, typePos, operatorAndTypePos }: TypeAssertionPayload) =>
-  InstructionNode.create<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', pos, { expr, typePos, getType, operatorAndTypePos })
+export const typeAssertion = (pos: Position, { expr, typeNode, typePos, operatorAndTypePos }: TypeAssertionPayload) =>
+  InstructionNode.create<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', pos, { expr, typePos, typeNode, operatorAndTypePos })
 
 InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', {
   exec: (rt, { expr, finalType }) => {
@@ -327,17 +328,20 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
     }
     return { rtRespState, value }
   },
-  typeCheck: (state, { expr, getType, typePos, operatorAndTypePos }) => {
-    const { respState, type } = InstructionNode.typeCheck(expr, state)
-    const finalType = getType(state, typePos)
+  typeCheck: (state, { expr, typeNode, typePos, operatorAndTypePos }) => {
+    const { respState: respState1, type } = InstructionNode.typeCheck(expr, state)
+    const { respState: respState2, type: finalType } = TypeNode.typeCheck(typeNode, state)
     if (!Type.isTypeAssignableTo(finalType, type) && !Type.isTypeAssignableTo(type, finalType)) {
       throw new SemanticError(`Attempted to change a type from "${Type.repr(type)}" to type "${Type.repr(finalType)}". "as" type assertions can only widen or narrow a provided type.`, operatorAndTypePos)
     }
-    return { respState, type: finalType, typePayload: { finalType } }
+    return {
+      respState: RespState.merge(respState1, respState2),
+      type: finalType, typePayload: { finalType },
+    }
   },
 })
 
-interface GenericParam { getType: TypeGetter, pos: Position }
+interface GenericParam { typeNode: AnyTypeNode, pos: Position }
 interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
 // FIXME: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
 export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokePayload) =>
@@ -379,8 +383,10 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
     }
     // Figure out the values of the generic params, and make sure they hold against the constraints
     let valuesOfGenericParams = new Map()
+    const respStates = [fnRespState]
     for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes.slice(0, genericParams.length))) {
-      const type = assignerGenericParam.getType(state, assignerGenericParam.pos)
+      const { respState, type } = TypeNode.typeCheck(assignerGenericParam.typeNode, state)
+      respStates.push(respState)
       Type.assertTypeAssignableTo(type, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
       valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, type)
     }
@@ -388,7 +394,7 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
     // Type check args
     const argsTypeChecked = args.map(p => InstructionNode.typeCheck(p, state))
     const argTypes = argsTypeChecked.map(p => p.type)
-    const argRespStates = argsTypeChecked.map(p => p.respState)
+    respStates.push(...argsTypeChecked.map(p => p.respState))
     if (fnTypeData.paramTypes.length !== argTypes.length) {
       throw new SemanticError(`Found ${argTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
@@ -428,7 +434,7 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
         return concreteType
       }
     })
-    return { respState: RespState.merge(fnRespState, ...argRespStates), type: returnType }
+    return { respState: RespState.merge(...respStates), type: returnType }
   },
 })
 
@@ -621,15 +627,20 @@ InstructionNode.register<{}, {}>('stdLib', {
   typeCheck: state => ({ respState: RespState.create(), type: state.stdLibShape }),
 })
 
-interface TypeAliasPayload { name: string, getType: TypeGetter, definedWithin: AnyInstructionNode, typePos: Position }
-export const typeAlias = (pos: Position, { name, getType, definedWithin, typePos }: TypeAliasPayload) =>
-  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, { name, getType, definedWithin, typePos })
+// FIXME: typePos may become unused after the `pos` refactor
+interface TypeAliasPayload { name: string, typeNode: AnyTypeNode, definedWithin: AnyInstructionNode, typePos: Position }
+export const typeAlias = (pos: Position, { name, typeNode, definedWithin, typePos }: TypeAliasPayload) =>
+  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, { name, typeNode, definedWithin, typePos })
 
 InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
   exec: (rt, { definedWithin }) => InstructionNode.exec(definedWithin, rt),
-  typeCheck: (state, { pos, name, getType, definedWithin, typePos }) => {
-    getType(state, typePos) // Make sure there's no errors
-    return InstructionNode.typeCheck(definedWithin, TypeState.addToTypeScope(state, name, () => getType(state, typePos), pos))
+  typeCheck: (state, { pos, name, typeNode, definedWithin }) => {
+    const { respState: respState1, type } = TypeNode.typeCheck(typeNode, state)
+    const { respState: respState2, type: finalType } = InstructionNode.typeCheck(definedWithin, TypeState.addToTypeScope(state, name, () => type, pos))
+    return {
+      respState: RespState.merge(respState1, respState2),
+      type: finalType,
+    }
   },
 })
 

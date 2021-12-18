@@ -226,12 +226,11 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
       nextNode,
     ])
   %} | ("export" _ $ALLOW_EXPORT):? "function" _ userValueIdentifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
-    ([export_, function_,, nameToken,, genericDefListEntry, params,, maybeBodyTypeNodeEntry, body]) => {
+    ([export_, function_,, nameToken,, genericDefListEntry, params,, bodyTypeNodeEntry, body]) => {
       const [genericParamDefList] = genericDefListEntry ?? [[]]
-      const [maybeBodyTypeNode] = maybeBodyTypeNodeEntry ?? [null]
-      const getBodyType = !maybeBodyTypeNode ? null : state => TypeNode.typeCheck(maybeBodyTypeNode, state).type // FIXME2
-      const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
-      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
+      const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
+      const fn = nodes.value.function_(DUMMY_POS, { params, body, maybeBodyTypeNode, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
+      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
         nextExpr: nextNode,
@@ -243,7 +242,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
     ([export_, ,, ,, nameToken,, ,, typeNode]) => (
       !!export_
         ? nextNode => { throw new Error('Not implemented') }
-        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, getType: state => TypeNode.typeCheck(typeNode, state).type, definedWithin: nextNode, typePos: DUMMY_POS }) // FIXME2
+        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, typeNode, definedWithin: nextNode, typePos: DUMMY_POS })
     )
   %}
 
@@ -296,12 +295,11 @@ expr10
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
   %} | (%gets _):? (genericParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
-    ([getsEntry, genericParamDefListEntry, argDefList,, maybeBodyTypeNodeEntry, ,, body]) => {
+    ([getsEntry, genericParamDefListEntry, argDefList,, bodyTypeNodeEntry, ,, body]) => {
       const purity = getsEntry == null ? PURITY.pure : PURITY.gets
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      const [maybeBodyTypeNode] = maybeBodyTypeNodeEntry ?? [null]
-      const getBodyType = state => !maybeBodyTypeNode ? null : TypeNode.typeCheck(maybeBodyTypeNode, state).type // FIXME2
-      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
+      const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
+      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
     }
   %} | expr15 {% id %}
 
@@ -319,7 +317,7 @@ expr20
 
 expr30
   -> expr30 _ "as" _ type {%
-    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, getType: state => TypeNode.typeCheck(typeNode, state).type, typePos: DUMMY_POS, operatorAndTypePos: DUMMY_POS }) // FIXME2
+    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, typeNode, typePos: DUMMY_POS, operatorAndTypePos: DUMMY_POS })
   %} | expr40 {% id %}
 
 expr40
@@ -359,10 +357,7 @@ expr80
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
-      ([,, entries]) => entries.map(([typeNode]) => {
-        const getType = state => TypeNode.typeCheck(typeNode, state).type // FIXME2
-        return { getType, pos: DUMMY_POS }
-      })
+      ([,, entries]) => entries.map(([typeNode]) => ({ typeNode, pos: DUMMY_POS }))
     %}
 
 expr100
@@ -383,12 +378,11 @@ expr100
     ([,, entries, ]) => {
       const content = new Map()
       for (const [identifier, typeNodeEntry,, ,, target] of entries) {
-        const [requiredTypeNode] = typeNodeEntry ?? []
+        const [maybeRequiredTypeNode] = typeNodeEntry ?? []
         if (content.has(identifier.value)) {
           throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
         }
-        const requiredTypeGetter = !requiredTypeNode ? null : state => TypeNode.typeCheck(requiredTypeNode, state).type // FIXME2
-        content.set(identifier.value, { requiredTypeGetter, target })
+        content.set(identifier.value, { maybeRequiredTypeNode, target })
       }
       return nodes.value.record(DUMMY_POS, { content })
     }
@@ -400,8 +394,7 @@ expr100
   %} | "tag" _ (genericParamDefList _):? type {%
     ([,, genericParamDefList_, typeNode]) => {
       const [genericParamDefList] = genericParamDefList_ ?? [null]
-      const getType = state => TypeNode.typeCheck(typeNode, state).type // FIXME2
-      return nodes.value.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
+      return nodes.value.tag(DUMMY_POS, { genericParamDefList, typeNode, typePos: DUMMY_POS })
     }
   %}
 
@@ -430,9 +423,8 @@ pattern30
 pattern40
   -> userValueIdentifier (_ type):? {%
     ([identifier, maybeTypeNodeEntry]) => {
-      const [, maybeTypeNode] = maybeTypeNodeEntry ?? []
-      const getType = state => !maybeTypeNode ? null : TypeNode.typeCheck(maybeTypeNode, state).type // FIXME2
-      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
+      const [, maybeTypeConstraintNode] = maybeTypeNodeEntry ?? []
+      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, maybeTypeConstraintNode, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
     }
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     ([leftBracket,, destructureEntries, rightBracket]) => (
