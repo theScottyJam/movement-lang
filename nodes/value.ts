@@ -1,4 +1,5 @@
-import * as Node from './helpers/Node';
+import * as InstructionNode from './variants/InstructionNode';
+import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
 import { assertNotNullish } from './helpers/typeAssertions';
 import { BadSyntaxError } from '../language/exceptions'
 import * as Position from '../language/Position'
@@ -11,8 +12,8 @@ import * as Type from '../language/Type'
 import * as types from '../language/types'
 import { PURITY } from '../language/constants'
 
-type Node = Node.Node
-type AssignmentTargetNode = Node.AssignmentTargetNode
+type AnyInstructionNode = InstructionNode.AnyInstructionNode
+type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
 type TypeState = TypeState.TypeState
@@ -30,12 +31,13 @@ interface GenericParamDefinition {
   constraintPos: Position
 }
 
-interface IntOpts { value: bigint }
-export const int = (pos: Position, { value }: IntOpts) => Node.create({
-  name: 'int',
-  pos,
-  exec: rt => ({ rtRespState: RtRespState.create(), value: values.createInt(value) }),
-  typeCheck: state => ({ respState: RespState.create(), type: types.createInt() }),
+interface IntPayload { value: bigint }
+export const int = (pos: Position, { value }: IntPayload) =>
+  InstructionNode.create<IntPayload, {}>('int', pos, { value })
+
+InstructionNode.register<IntPayload, {}>('int', {
+  exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createInt(value) }),
+  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createInt() }),
 })
 
 const parseEscapeSequences = (rawStr: string, pos: Position) => {
@@ -64,37 +66,38 @@ const parseEscapeSequences = (rawStr: string, pos: Position) => {
   return value
 }
 
+interface StringPayload { value: string }
 interface StringOpts { uninterpretedValue: string }
-export const string = (pos: Position, { uninterpretedValue }: StringOpts) => {
-  const value = parseEscapeSequences(uninterpretedValue, pos)
-  return Node.create({
-    name: 'string',
-    pos,
-    data: { value },
-    exec: rt => ({ rtRespState: RtRespState.create(), value: values.createString(value) }),
-    typeCheck: state => ({ respState: RespState.create(), type: types.createString() }),
-  })
-}
+export const string = (pos: Position, { uninterpretedValue }: StringOpts) => InstructionNode.create<StringPayload, {}>('string', pos, {
+  value: parseEscapeSequences(uninterpretedValue, pos),
+})
 
-interface BooleanOpts { value: boolean }
-export const boolean = (pos: Position, { value }: BooleanOpts) => Node.create({
-  name: 'boolean',
-  pos,
-  exec: rt => ({ rtRespState: RtRespState.create(), value: values.createBoolean(value) }),
-  typeCheck: state => ({ respState: RespState.create(), type: types.createBoolean() }),
+InstructionNode.register<StringPayload, {}>('string', {
+  exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createString(value) }),
+  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createString() }),
+})
+
+interface BooleanPayload { value: boolean }
+export const boolean = (pos: Position, { value }: BooleanPayload) =>
+  InstructionNode.create<BooleanPayload, {}>('boolean', pos, { value })
+
+InstructionNode.register<BooleanPayload, {}>('boolean', {
+  exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createBoolean(value) }),
+  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createBoolean() }),
 })
 
 // TODO: Use genericParamDefList
-interface TagOpts { genericParamDefList: GenericParamDefinition[], getType: TypeGetter, typePos: Position }
-interface TagTypeContext { type: types.TagType }
-export const tag = (pos: Position, { genericParamDefList, getType, typePos }: TagOpts) => Node.create<TagTypeContext>({
-  name: 'tag',
-  pos,
-  exec: (rt, { typeCheckContext: { type } }) => ({
+interface TagPayload { genericParamDefList: GenericParamDefinition[], getType: TypeGetter, typePos: Position }
+interface TagTypePayload { type: types.TagType }
+export const tag = (pos: Position, { genericParamDefList, getType, typePos }: TagPayload) =>
+  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, { genericParamDefList, getType, typePos })
+
+InstructionNode.register<TagPayload, TagTypePayload>('tag', {
+  exec: (rt, { type }) => ({
     rtRespState: RtRespState.create(),
     value: values.createTag(type),
   }),
-  typeCheck: state => {
+  typeCheck: (state, { getType, typePos }) => {
     const type = types.createTag({
       tagSentinel: Symbol('tag'),
       boxedType: getType(state, typePos),
@@ -102,63 +105,66 @@ export const tag = (pos: Position, { genericParamDefList, getType, typePos }: Ta
     return {
       respState: RespState.create(),
       type,
-      typeCheckContext: { type }
+      typePayload: { type }
     }
   },
 })
 
 
-interface RecordValueDescription { target: Node, requiredTypeGetter: TypeGetter, typeGetterPos: Position }
-interface RecordOpts { content: Map<string, RecordValueDescription> }
-export const record = (pos: Position, { content }: RecordOpts) => {
-  let finalType: types.RecordType | null
-  return Node.create({
-    name: 'record',
-    pos,
-    exec: rt => {
-      const nameToValue = new Map()
-      const rtRespStates = []
-      for (const [name, { target }] of content) {
-        const { rtRespState, value } = target.exec(rt)
-        rtRespStates.push(rtRespState)
-        nameToValue.set(name, value)
-      }
+interface RecordValueDescription { target: AnyInstructionNode, requiredTypeGetter: TypeGetter, typeGetterPos: Position }
+interface RecordPayload { content: Map<string, RecordValueDescription> }
+interface RecordTypePayload { finalType: types.RecordType }
+export const record = (pos: Position, { content }: RecordPayload) =>
+  InstructionNode.create<RecordPayload, RecordTypePayload>('record', pos, { content })
 
-      return {
-        rtRespState: RtRespState.merge(...rtRespStates),
-        value: values.createRecord(nameToValue, assertNotNullish(finalType))
-      }
-    },
-    typeCheck: state => {
-      const nameToType = new Map<string, AnyType>()
-      const respStates = []
-      for (const [name, { target, requiredTypeGetter, typeGetterPos }] of content) {
-        const { respState, type } = target.typeCheck(state)
-        respStates.push(respState)
-        const requiredType = requiredTypeGetter ? requiredTypeGetter(state, typeGetterPos) : null
-        if (requiredType) Type.assertTypeAssignableTo(type, requiredType, target.pos)
-        const finalType = requiredType ? requiredType : type
-        nameToType.set(name, finalType)
-      }
-      finalType = types.createRecord({ nameToType })
-      return { respState: RespState.merge(...respStates), type: finalType }
-    },
-  })
-}
+InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
+  exec: (rt, { content, finalType }) => {
+    const nameToValue = new Map()
+    const rtRespStates = []
+    for (const [name, { target }] of content) {
+      const { rtRespState, value } = InstructionNode.exec(target, rt)
+      rtRespStates.push(rtRespState)
+      nameToValue.set(name, value)
+    }
 
-interface FunctionOpts {
-  params: AssignmentTargetNode[]
-  body: Node
+    return {
+      rtRespState: RtRespState.merge(...rtRespStates),
+      value: values.createRecord(nameToValue, assertNotNullish(finalType))
+    }
+  },
+  typeCheck: (state, { content }) => {
+    const nameToType = new Map<string, AnyType>()
+    const respStates = []
+    for (const [name, { target, requiredTypeGetter, typeGetterPos }] of content) {
+      const { respState, type } = InstructionNode.typeCheck(target, state)
+      respStates.push(respState)
+      const requiredType = requiredTypeGetter ? requiredTypeGetter(state, typeGetterPos) : null
+      if (requiredType) Type.assertTypeAssignableTo(type, requiredType, target.pos)
+      const finalType = requiredType ? requiredType : type
+      nameToType.set(name, finalType)
+    }
+    const finalType = types.createRecord({ nameToType })
+    return { respState: RespState.merge(...respStates), type: finalType, typePayload: { finalType } }
+  },
+})
+
+interface FunctionPayload {
+  params: AnyAssignmentTargetNode[]
+  body: AnyInstructionNode
   getBodyType: TypeGetter | null
   bodyTypePos: Position
   purity: purityTypes
   genericParamDefList: GenericParamDefinition[]
 }
-interface FunctionTypeContext { finalType: types.FunctionType, capturedStates: readonly string[] }
-export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionOpts) => Node.create<FunctionTypeContext>({
-  name: 'function',
-  pos,
-  exec: (rt, { typeCheckContext: { finalType, capturedStates } }) => ({
+interface FunctionTypePayload {
+  finalType: types.FunctionType,
+  capturedStates: readonly string[]
+}
+export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList }: FunctionPayload) =>
+  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, { params, body, getBodyType, bodyTypePos, purity, genericParamDefList })
+
+InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
+  exec: (rt, { params, body, finalType, capturedStates }) => ({
     rtRespState: RtRespState.create(),
     value: values.createFunction(
       {
@@ -169,7 +175,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
       assertNotNullish(finalType),
     )
   }),
-  typeCheck: outerState => {
+  typeCheck: (outerState, { pos, params, body, getBodyType, bodyTypePos, purity, genericParamDefList }) => {
     let state = TypeState.create({
       scopes: [...outerState.scopes, { forFn: Symbol(), typeLookup: new Map() }],
       definedTypes: [...outerState.definedTypes, new Map()],
@@ -199,14 +205,14 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
     const paramTypes = []
     const respStates = []
     for (const param of params) {
-      const { respState, type } = param.contextlessTypeCheck(state)
+      const { respState, type } = AssignmentTargetNode.contextlessTypeCheck(param, state)
       paramTypes.push(type)
       respStates.push(RespState.update(respState, { declarations: [] }))
       state = TypeState.applyDeclarations(state, respState)
     }
 
     // Type checking body
-    const { respState: bodyRespState, type: bodyType } = body.typeCheck(state)
+    const { respState: bodyRespState, type: bodyType } = InstructionNode.typeCheck(body, state)
 
     // Getting declared body type
     const requiredBodyType = getBodyType ? getBodyType(state, bodyTypePos) : null
@@ -241,7 +247,7 @@ export const function_ = (pos: Position, { params, body, getBodyType, bodyTypePo
     return {
       respState: RespState.update(finalRespState, { outerFnVars: newOuterScopeVars }),
       type: finalType,
-      typeCheckContext: { finalType, capturedStates }
+      typePayload: { finalType, capturedStates }
     }
   },
 })

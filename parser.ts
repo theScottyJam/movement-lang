@@ -5,10 +5,16 @@ import { BadSyntaxError, SemanticError } from './language/exceptions'
 import * as Type from './language/Type'
 import * as types from './language/types'
 import * as values from './language/values'
-import type * as Node from './nodes/helpers/Node' // TODO: Maybe I need to move this type definition into a more accessible location
+import type { Root as AstRoot } from './nodes/variants/Root' // TODO: Maybe I need to move this type definition into a more accessible location
 import { createStdLibAst } from './stdLib/stdLib'
 import { formatParseError, prettyPrintLanguageError } from './errorFormatting'
 import builtGrammar from './grammar.built'
+
+// This helper should be eventually removed
+globalThis.debug = (...args) => {
+  console.info(...args)
+  return args[args.length - 1]
+}
 
 const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)
 
@@ -31,7 +37,7 @@ function expectErrorOfTypes<T>(callback: () => T, errorTypes: (new (...args: unk
   }
 }
 
-function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): Node.Root {
+function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): AstRoot {
   // A fresh parser needs to be made between each parse.
   const parser = new nearley.Parser(compiledGrammar);
 
@@ -59,7 +65,7 @@ interface RecursiveParseOpts {
 }
 function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts = {}) {
   loadModuleSource ??= modulePath => fs.readFileSync(modulePath, 'utf-8')
-  const moduleDefinitions = new Map<string, Node.Root>()
+  const moduleDefinitions = new Map<string, AstRoot>()
   const startingPath = path.normalize(path_)
   const pathsToLoad = [startingPath]
   while (pathsToLoad.length) {

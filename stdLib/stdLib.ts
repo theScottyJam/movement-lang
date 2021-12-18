@@ -8,7 +8,7 @@ import * as RtRespState from '../language/RtRespState'
 import * as Value from '../language/Value'
 import * as values from '../language/values'
 import * as nodes from '../nodes'
-import * as Node from '../nodes/helpers/Node'
+import * as InstructionNode from '../nodes/variants/InstructionNode'
 import { PURITY } from '../language/constants'
 import * as Runtime from '../language/Runtime'
 
@@ -38,28 +38,37 @@ const construct = {
   fn: ({ purity, paramTypeGetters, getReturnType, dependencies = [], body }: ConstructFnOpts) =>
     nodes.value.function_(DUMMY_POS, {
       params: paramTypeGetters.map((typeGetter, i) => construct.bind('p' + i, typeGetter)),
-      body: construct._customFnBody(paramTypeGetters.length, getReturnType, dependencies, body),
+      body: construct._customFnBody({ argCount: paramTypeGetters.length, getReturnType, dependencies, fn: body }),
       getBodyType: null,
       bodyTypePos: DUMMY_POS,
       purity,
       genericParamDefList: [],
     }),
   
-  _customFnBody: (argCount: number, getReturnType: TypeGetter, dependencies: string[], fn: CustomFnBodyCallback) =>
-    Node.create({
-      name: 'jsNode',
-      pos: DUMMY_POS,
-      exec: rt => {
+  _customFnBody: (() => {
+    const jsFnBodyName = 'jsFnBody:' + Math.random().toString().slice(2, 7)
+    interface InstructionNodePayload {
+      readonly argCount: number
+      readonly getReturnType: TypeGetter
+      readonly dependencies: string[]
+      readonly fn: CustomFnBodyCallback
+    }
+    InstructionNode.register<InstructionNodePayload, {}>(jsFnBodyName, {
+      exec: (rt, { argCount, fn }) => {
         const args = Array(argCount).fill(null).map((_, i) => Runtime.lookupVar(rt, 'p' + i))
         return {
           rtRespState: RtRespState.create(),
           value: fn(rt, ...args),
         }
       },
-      typeCheck: state => ({ respState: RespState.create({ outerFnVars: dependencies }), type: getReturnType(state) }),
-    }),
+      typeCheck: (state, { getReturnType, dependencies }) => ({ respState: RespState.create({ outerFnVars: dependencies }), type: getReturnType(state) }),
+    })
 
-  record: (mapping: { [key: string]: Node.Node }) =>
+    return ({ argCount, getReturnType, dependencies, fn }: InstructionNodePayload) =>
+      InstructionNode.create<InstructionNodePayload, {}>(jsFnBodyName, DUMMY_POS, { argCount, getReturnType, dependencies, fn })
+    })(),
+
+  record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
     nodes.value.record(DUMMY_POS, {
       content: new Map(
         Object.entries(mapping)
@@ -74,7 +83,7 @@ const construct = {
   }),
 }
 
-const createStdLibMapping: () => { [key: string]: Node.Node } = () => {
+const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstructionNode } = () => {
   const stdLibDef: any = {}
   const private_: any = {}
 
@@ -126,29 +135,27 @@ const createStdLibMapping: () => { [key: string]: Node.Node } = () => {
 export const createStdLibAst = () => {
   const { public: public_, private: private_ } = createStdLibMapping()
   return nodes.root({
-    module: nodes.module(DUMMY_POS, {
-      dependencies: [],
-      content: nodes.declaration(DUMMY_POS, {
-        declarations: Object.entries(private_)
+    dependencies: [],
+    content: nodes.declaration(DUMMY_POS, {
+      declarations: Object.entries(private_)
+        .map(([key, value]) => ({
+          assignmentTarget: construct.bind(key),
+          expr: value,
+          assignmentTargetPos: DUMMY_POS
+        })),
+      nextExpr: nodes.declaration(DUMMY_POS, {
+        declarations: Object.entries(public_)
           .map(([key, value]) => ({
             assignmentTarget: construct.bind(key),
             expr: value,
             assignmentTargetPos: DUMMY_POS
           })),
-        expr: nodes.declaration(DUMMY_POS, {
-          declarations: Object.entries(public_)
-            .map(([key, value]) => ({
-              assignmentTarget: construct.bind(key),
-              expr: value,
-              assignmentTargetPos: DUMMY_POS
-            })),
-          expr: nodes.noop(),
-          newScope: false,
-          export: true,
-        }),
+        nextExpr: nodes.noop(),
         newScope: false,
-        export: false,
-      })
-    }),
+        export: true,
+      }),
+      newScope: false,
+      export: false,
+    })
   })
 }

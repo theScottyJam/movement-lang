@@ -18,6 +18,7 @@
 
 @{%
   import * as nodes from './nodes/index'
+  import * as InstructionNode from './nodes/variants/InstructionNode'
   import moo from 'moo'
   import * as Type from './language/Type'
   import * as types from './language/types'
@@ -157,26 +158,21 @@ nonEmptyDeliminated[PATTERN, DELIMITER, TRAILING_DELIMITER]
   %}
 
 root
-  -> _ module {%
-    ([, module]) => nodes.root({ module })
-  %}
-
-module
-  -> deliminated[importStatement (_ ";"):?, _, _] deliminated[moduleLevelStatement (_ ";"):?, _, _] (%begin _ block _):? {%
-    ([importEntries, statementEntries, beginBlockEntry]) => {
+  -> _ deliminated[importStatement (_ ";"):?, _, _] deliminated[moduleLevelStatement (_ ";"):?, _, _] (%begin _ block _):? {%
+    ([, importEntries, statementEntries, beginBlockEntry]) => {
       const [,, beginBlock] = beginBlockEntry ?? [,,, null]
       const makeImportNodes = importEntries.map(x => x[0]).flat()
       const statements = statementEntries.map(x => x[0]).flat()
       const rootNodeWithoutImports = statements.reverse().reduce((previousNode, makeNode) => (
         makeNode(previousNode)
       ), beginBlock ? nodes.beginBlock(DUMMY_POS, beginBlock) : nodes.noop())
-      const { imports, previousNode: rootNode } =
+      const { imports, previousNode: firstNode } =
         makeImportNodes.reverse().reduce(({ imports, previousNode }, makeNode) => {
           const newNode = makeNode(previousNode)
-          return { imports: [...imports, newNode.data.dependency], previousNode: newNode }
+          return { imports: [...imports, newNode.payload.dependency], previousNode: newNode } // FIXME: I'm reaching into another node's internal data
         }, { imports: [], previousNode: rootNodeWithoutImports })
-      return nodes.module(DUMMY_POS, {
-        content: rootNode,
+      return nodes.root({
+        content: firstNode,
         dependencies: imports,
       })
     }
@@ -186,14 +182,14 @@ importStatement
   -> "import" _ assignmentTarget _ "from" _ stringLiteral {%
     ([,, assignmentTarget,, ,, stringLiteral]) => nextNode => (
       nodes.importMeta(DUMMY_POS, {
-        from: stringLiteral.data.value,
+        from: stringLiteral.payload.value, // FIXME: I'm reaching into the data of something else.
         childNode: nodes.declaration(DUMMY_POS, {
           declarations: [{
             assignmentTarget,
-            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.data.value }),
+            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.payload.value }), // FIXME: I'm reaching into the data of something else.
             assignmentTargetPos: DUMMY_POS
           }],
-          expr: nextNode,
+          nextExpr: nextNode,
           newScope: false,
           export: false,
         }),
@@ -217,7 +213,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
     ([export_, let_,, assignmentTarget,, ,, expr]) => nextNode => (
       nodes.declaration(range(let_, expr.pos), {
         declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
-        expr: nextNode,
+        nextExpr: nextNode,
         newScope: false,
         export: !!export_,
       })
@@ -240,7 +236,7 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
       const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
-        expr: nextNode,
+        nextExpr: nextNode,
         newScope: false,
         export: !!export_,
       })
@@ -297,7 +293,7 @@ expr10
       const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
         { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
       ))
-      return nodes.declaration(DUMMY_POS, { declarations, expr, newScope: true })
+      return nodes.declaration(DUMMY_POS, { declarations, nextExpr: expr, newScope: true })
     }
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
@@ -378,7 +374,7 @@ expr100
         l: nodes.stdLibRef(asPos(token)),
         identifier: token.value.slice(1),
       })
-      : nodes.identifier(asPos(token), { identifier: token.value })
+      : nodes.varLookup(asPos(token), { identifier: token.value })
   %} | stringLiteral {%
     id
   %} | "{" _ deliminated[userValueIdentifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
@@ -481,7 +477,7 @@ type
     }
   %} | "#" ":" _ expr70  {%
     ([,,, expr]) => (state, pos) => {
-      const { respState, type } = expr.typeCheck(state)
+      const { respState, type } = InstructionNode.typeCheck(expr, state) // FIXME: This sort of logic should happen within a TypeNode of some sort.
       // Ignoring the respState - there's currently not a way to transfer that back up.
       // Plus, it has bad information, like, dependendencies on variables from outside scopes that
       // don't actually exist, because we're never going to execute this expression.

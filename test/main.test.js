@@ -315,7 +315,7 @@ describe('Types', () => {
       .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get"')
   })
 
-  it('Each return must provide compatible types.', () => {
+  test('Each return must provide compatible types.', () => {
     expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
     expect(customTestRun('function fn() { if true { return { x: 2 } } else { return { x: 3, y: 2 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
     expect(customTestRun('function fn() {}; _printType fn')[0]).toBe('#function() #unit')
@@ -625,13 +625,13 @@ describe('Generics', () => {
   })
 
   // TODO
-  xit('Generics from the same source are interchangeable', () => {
+  xtest('Generics from the same source are interchangeable', () => {
     expect(customTestRun('let fn = <#T>(x #T) => let y #T = x in y; print fn(2)')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ y #int }>(x #T) => let y #T = x in y; print fn({ y: 2 }).y')[0].raw).toBe(2n)
   })
 
   // TODO
-  xit('??????????', () => {
+  xtest('<unnamed test>', () => {
     // TODO: I need to store the generic params on the stack, if I'm wanting to be able to use them in these sorts of locations.
     expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)
   })
@@ -648,5 +648,6 @@ describe('Generics', () => {
 
 /* OTHER TESTS
 # unknown and never
+# * When all branches of an if/else throw, the function's return type should be #never instead of #unit
 # I should make a special print function (like I did with _printType), that prints out variables captured in a closure, for testing purposes (I can see if I'm correctly not capturing variables that don't need ot be captured)
 */
