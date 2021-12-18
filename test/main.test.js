@@ -647,6 +647,7 @@ describe('Generics', () => {
 })
 
 /* OTHER TESTS
+# Invalid built-in types should throw errors (e.g. #something)
 # unknown and never
 # * When all branches of an if/else throw, the function's return type should be #never instead of #unit
 # I should make a special print function (like I did with _printType), that prints out variables captured in a closure, for testing purposes (I can see if I'm correctly not capturing variables that don't need ot be captured)

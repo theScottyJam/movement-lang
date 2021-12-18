@@ -3,7 +3,7 @@ import type { Position } from './Position'
 import type { RespState } from './RespState'
 import * as Type from './Type'
 import type * as types from './types'
-import type * as Node from '../nodes/helpers/Node' // TODO: I probably should not be reaching over here. (Maybe I can parameterize TypeState instead, with a generic parameter)
+import type { Root as AstRoot } from '../nodes/variants/Root' // TODO: I probably should not be reaching over here. (Maybe I can parameterize TypeState instead, with a generic parameter)
 import { SemanticError } from './exceptions'
 import { PURITY } from './constants'
 
@@ -36,7 +36,7 @@ export interface TypeState {
   // true if this is the first-loaded module
   readonly isMainModule: boolean
   // Map of paths to loaded modules. This value won't change from its initial value.
-  readonly moduleDefinitions: Map<string, Node.Root>
+  readonly moduleDefinitions: Map<string, AstRoot>
   // Map of paths to module shapes
   readonly moduleShapes: { readonly mutable: Map<string, types.RecordType> }
   // List of modules that are currently being looked at, where the first is the main module.

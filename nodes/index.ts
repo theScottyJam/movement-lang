@@ -24,10 +24,10 @@ import { PURITY, getPurityLevel } from '../language/constants'
 import { zip, zip3 } from '../util'
 export * as value from './value'
 export * as assignmentTarget from './assignmentTarget'
+export * as type from './type'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
-// type InvokeNode = Node.InvokeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
 type TypeState = TypeState.TypeState
@@ -338,7 +338,7 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
 })
 
 interface GenericParam { getType: TypeGetter, pos: Position }
-interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity: typeof PURITY[keyof typeof PURITY] }
+interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
 // FIXME: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
 export const invoke = (pos: Position, { fnExpr, genericParams, args }: InvokePayload) =>
   InstructionNode.create<InvokePayload, {}>('invoke', pos, { fnExpr, genericParams, args, callWithPurity: PURITY.pure })

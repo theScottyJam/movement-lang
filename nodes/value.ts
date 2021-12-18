@@ -1,4 +1,5 @@
 import * as InstructionNode from './variants/InstructionNode';
+import * as TypeNode from './variants/TypeNode';
 import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
 import { assertNotNullish } from './helpers/typeAssertions';
 import { BadSyntaxError } from '../language/exceptions'
@@ -14,6 +15,7 @@ import { PURITY } from '../language/constants'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
+type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
 type TypeState = TypeState.TypeState
@@ -22,11 +24,10 @@ type AnyType = Type.AnyType
 
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 type TypeGetter = (TypeState, Position) => AnyType
-type ConcreteTypeGetter = (TypeState, Position) => Type.AnyConcreteType
 
 interface GenericParamDefinition {
   identifier: string
-  getConstraint: ConcreteTypeGetter
+  constraintNode: AnyTypeNode
   identPos: Position
   constraintPos: Position
 }
@@ -191,8 +192,11 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
 
     // Adding generic params to type scope
     const genericParamTypes = []
-    for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
-      const constraint_ = getConstraint(state, constraintPos)
+    const respStates = []
+    for (const { identifier, constraintNode, identPos } of genericParamDefList) {
+      const { respState, type: constraint__ } = TypeNode.typeCheck(constraintNode, state)
+      respStates.push(respState)
+      const constraint_ = Type.assertIsConcreteType(constraint__) // FIXME: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function definition.
       const constraint = Type.createParameterType({
         constrainedBy: constraint_,
         parameterName: constraint_.reprOverride ?? 'UNKNOWN', // TODO: This UNKNOWN type shouldn't be a thing. Perhaps I shouldn't have had this parameterName idea.
@@ -203,7 +207,6 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
 
     // Validating parameters
     const paramTypes = []
-    const respStates = []
     for (const param of params) {
       const { respState, type } = AssignmentTargetNode.contextlessTypeCheck(param, state)
       paramTypes.push(type)

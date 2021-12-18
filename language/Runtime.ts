@@ -1,6 +1,6 @@
 import type { AnyValue } from './Value'
 import type * as values from './values'
-import type * as Node from '../nodes/helpers/Node' // TODO: Shouldn't reach in like this
+import type { Root as AstRoot } from '../nodes/variants/Root' // TODO: Shouldn't reach in like this
 
 export interface RuntimeScope {
   readonly identifier: string
@@ -15,7 +15,7 @@ export interface Runtime {
   readonly scopes: readonly RuntimeScope[]
   readonly behaviors: RuntimeBehaviors
   // Mapping of paths to AST trees for modules
-  readonly moduleDefinitions: Map<string, Node.Root>
+  readonly moduleDefinitions: Map<string, AstRoot>
   // Mapping of loaded modules
   readonly cachedModules: { readonly mutable: Map<string, values.RecordValue> }
   readonly stdLib: values.RecordValue
@@ -28,7 +28,7 @@ function defaultShowDebugOutputBehaviors(value: AnyValue) {
 interface CreateOpts {
   readonly scopes?: readonly RuntimeScope[]
   readonly behaviors?: Partial<RuntimeBehaviors>
-  readonly moduleDefinitions: Map<string, Node.Root>
+  readonly moduleDefinitions: Map<string, AstRoot>
   readonly cachedModules: { readonly mutable: Map<string, values.RecordValue> }
   readonly stdLib: values.RecordValue
 }

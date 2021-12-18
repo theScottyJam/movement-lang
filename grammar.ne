@@ -19,6 +19,7 @@
 @{%
   import * as nodes from './nodes/index'
   import * as InstructionNode from './nodes/variants/InstructionNode'
+  import * as TypeNode from './nodes/variants/TypeNode'
   import moo from 'moo'
   import * as Type from './language/Type'
   import * as types from './language/types'
@@ -26,10 +27,6 @@
   import { PURITY } from './language/constants'
   import { from as asPos, range } from './language/Position'
   import { SemanticError } from './language/exceptions'
-
-  const mapMapValues = (map, mapFn) => (
-    new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
-  )
 
   const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' } as moo.Token) // TODO - get rid of all occurances of this
 %}
@@ -229,9 +226,10 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
       nextNode,
     ])
   %} | ("export" _ $ALLOW_EXPORT):? "function" _ userValueIdentifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
-    ([export_, function_,, nameToken,, genericDefListEntry, params,, getBodyTypeEntry, body]) => {
+    ([export_, function_,, nameToken,, genericDefListEntry, params,, maybeBodyTypeNodeEntry, body]) => {
       const [genericParamDefList] = genericDefListEntry ?? [[]]
-      const [getBodyType] = getBodyTypeEntry ?? [null]
+      const [maybeBodyTypeNode] = maybeBodyTypeNodeEntry ?? [null]
+      const getBodyType = !maybeBodyTypeNode ? null : state => TypeNode.typeCheck(maybeBodyTypeNode, state).type // FIXME2
       const fn = nodes.value.function_(DUMMY_POS, { params, body, getBodyType, bodyTypePos: DUMMY_POS, purity: PURITY.none, genericParamDefList })
       const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, getTypeConstraint: null, identPos: asPos(nameToken), typeConstraintPos: DUMMY_POS })
       return nextNode => nodes.declaration(DUMMY_POS, {
@@ -242,10 +240,10 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
       })
     }
   %} | ("export" _):? "type" _ "alias" _ %userType _ "=" _ type {%
-    ([export_, ,, ,, nameToken,, ,, getType]) => (
+    ([export_, ,, ,, nameToken,, ,, typeNode]) => (
       !!export_
         ? nextNode => { throw new Error('Not implemented') }
-        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, getType, definedWithin: nextNode, typePos: DUMMY_POS })
+        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, getType: state => TypeNode.typeCheck(typeNode, state).type, definedWithin: nextNode, typePos: DUMMY_POS }) // FIXME2
     )
   %}
 
@@ -298,10 +296,11 @@ expr10
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
   %} | (%gets _):? (genericParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
-    ([getsEntry, genericParamDefListEntry, argDefList,, getBodyTypeEntry, ,, body]) => {
+    ([getsEntry, genericParamDefListEntry, argDefList,, maybeBodyTypeNodeEntry, ,, body]) => {
       const purity = getsEntry == null ? PURITY.pure : PURITY.gets
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      const [getBodyType] = getBodyTypeEntry ?? [null]
+      const [maybeBodyTypeNode] = maybeBodyTypeNodeEntry ?? [null]
+      const getBodyType = state => !maybeBodyTypeNode ? null : TypeNode.typeCheck(maybeBodyTypeNode, state).type // FIXME2
       return nodes.value.function_(DUMMY_POS, { params: argDefList, body, getBodyType, bodyTypePos: DUMMY_POS, purity, genericParamDefList })
     }
   %} | expr15 {% id %}
@@ -320,7 +319,7 @@ expr20
 
 expr30
   -> expr30 _ "as" _ type {%
-    ([expr,, ,, getType]) => nodes.typeAssertion(DUMMY_POS, { expr, getType, typePos: DUMMY_POS, operatorAndTypePos: DUMMY_POS })
+    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, getType: state => TypeNode.typeCheck(typeNode, state).type, typePos: DUMMY_POS, operatorAndTypePos: DUMMY_POS }) // FIXME2
   %} | expr40 {% id %}
 
 expr40
@@ -360,7 +359,10 @@ expr80
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
-      ([,, entries]) => entries.map(([getType]) => ({ getType, pos: DUMMY_POS }))
+      ([,, entries]) => entries.map(([typeNode]) => {
+        const getType = state => TypeNode.typeCheck(typeNode, state).type // FIXME2
+        return { getType, pos: DUMMY_POS }
+      })
     %}
 
 expr100
@@ -380,11 +382,12 @@ expr100
   %} | "{" _ deliminated[userValueIdentifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     ([,, entries, ]) => {
       const content = new Map()
-      for (const [identifier, typeEntry,, ,, target] of entries) {
-        const [requiredTypeGetter] = typeEntry ?? []
+      for (const [identifier, typeNodeEntry,, ,, target] of entries) {
+        const [requiredTypeNode] = typeNodeEntry ?? []
         if (content.has(identifier.value)) {
           throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
         }
+        const requiredTypeGetter = !requiredTypeNode ? null : state => TypeNode.typeCheck(requiredTypeNode, state).type // FIXME2
         content.set(identifier.value, { requiredTypeGetter, target })
       }
       return nodes.value.record(DUMMY_POS, { content })
@@ -395,8 +398,9 @@ expr100
       return nodes.match(DUMMY_POS, { matchValue, matchArms })
     }
   %} | "tag" _ (genericParamDefList _):? type {%
-    ([,, genericParamDefList_, getType]) => {
+    ([,, genericParamDefList_, typeNode]) => {
       const [genericParamDefList] = genericParamDefList_ ?? [null]
+      const getType = state => TypeNode.typeCheck(typeNode, state).type // FIXME2
       return nodes.value.tag(DUMMY_POS, { genericParamDefList, getType, typePos: DUMMY_POS })
     }
   %}
@@ -425,8 +429,9 @@ pattern30
 
 pattern40
   -> userValueIdentifier (_ type):? {%
-    ([identifier, maybeGetTypeEntry]) => {
-      const [, getType] = maybeGetTypeEntry ?? []
+    ([identifier, maybeTypeNodeEntry]) => {
+      const [, maybeTypeNode] = maybeTypeNodeEntry ?? []
+      const getType = state => !maybeTypeNode ? null : TypeNode.typeCheck(maybeTypeNode, state).type // FIXME2
       return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, getTypeConstraint: getType, identPos: DUMMY_POS, typeConstraintPos: DUMMY_POS })
     }
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
@@ -437,80 +442,41 @@ pattern40
     )
   %}
 
-@{%
-  const createFnTypeGetter = ({ purity, genericParamDefList, paramTypeGetters, getBodyType }) => (state, pos) => {
-    let constraints = []
-    for (const { identifier, getConstraint, identPos, constraintPos } of genericParamDefList) {
-      const constraint_ = getConstraint(state, constraintPos)
-      const constraint = Type.createParameterType({
-        constrainedBy: constraint_,
-        parameterName: constraint_.reprOverride ?? 'UNKNOWN' // TODO: This parameterName was probably a bad idea.
-      })
-      constraints.push(constraint)
-      state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
-    }
-    return types.createFunction({
-      paramTypes: paramTypeGetters.map(getType => getType(state, pos)),
-      genericParamTypes: constraints,
-      bodyType: getBodyType(state, pos),
-      purity,
-    })
-  }
-%}
-
 type
-  -> %userType {%
-    ([token]) => (state, pos) => {
-      const typeInfo = TypeState.lookupType(state, token.value)
-      if (!typeInfo) throw new SemanticError(`Type "${token.value}" not found.`, asPos(token))
-      return Type.withName(typeInfo.createType(), token.value)
-    }
-  %} | %simpleType {%
-    ([token]) => {
-      if (token.value === '#unit') return () => types.createUnit()
-      else if (token.value === '#int') return () => types.createInt()
-      else if (token.value === '#string') return () => types.createString()
-      else if (token.value === '#boolean') return () => types.createBoolean()
-      else if (token.value === '#never') return () => types.createNever()
-      else if (token.value === '#unknown') return () => types.createUnknown()
-      else throw new SemanticError(`Invalid built-in type ${token.value}`, asPos(token))
-    }
+  -> %simpleType {%
+    ([token]) => nodes.type.simpleType(asPos(token), { typeName: token.value })
+  %} | %userType {%
+    ([token]) => nodes.type.userTypeLookup(asPos(token), { typeName: token.value })
   %} | "#" ":" _ expr70  {%
-    ([,,, expr]) => (state, pos) => {
-      const { respState, type } = InstructionNode.typeCheck(expr, state) // FIXME: This sort of logic should happen within a TypeNode of some sort.
-      // Ignoring the respState - there's currently not a way to transfer that back up.
-      // Plus, it has bad information, like, dependendencies on variables from outside scopes that
-      // don't actually exist, because we're never going to execute this expression.
-      return Type.getTypeMatchingDescendants(type, pos)
-    }
+    ([,,, expr]) => nodes.type.evaluateExprType(DUMMY_POS, { expr })
   %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
-    ([, ,, entries, ]) => {
-      const content = new Map()
-      for (const [identifierToken,, getType] of entries) {
-        if (content.has(identifierToken.value)) {
+    ([, ,, entries]) => {
+      const nameToTypeNode = new Map()
+      for (const [identifierToken,, typeNode] of entries) {
+        if (nameToTypeNode.has(identifierToken.value)) {
           throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
         }
-        content.set(identifierToken.value, getType)
+        nameToTypeNode.set(identifierToken.value, typeNode)
       }
-      return (state, pos) => types.createRecord({ nameToType: mapMapValues(content, getType => getType(state, pos)) })
+      return nodes.type.recordType(DUMMY_POS, { nameToTypeNode })
     }
   %} | ("#gets" _ | "#") (genericParamDefList _):? typeList _ "=>" _ type {%
-    ([[callModifierToken], genericParamDefListEntry, paramTypeGetters,, ,, getBodyType]) => {
+    ([[callModifierToken], genericParamDefListEntry, paramTypeNodes,, ,, bodyTypeNode]) => {
       const purity = callModifierToken.value === '#gets' ? PURITY.gets : PURITY.pure
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
+      return nodes.type.functionType(DUMMY_POS, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
     }
   %} | "#function" _ (genericParamDefList _):? typeList _ type {%
-    ([,, genericParamDefListEntry, paramTypeGetters,, getBodyType]) => {
+    ([,, genericParamDefListEntry, paramTypeNodes,, bodyTypeNode]) => {
       const purity = PURITY.none
       const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      return createFnTypeGetter({ purity, genericParamDefList, paramTypeGetters, getBodyType })
+      return nodes.type.functionType(DUMMY_POS, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
     }
   %}
 
   typeList
     -> "(" _ deliminated[type, "," _, ("," _):?] ")" {%
-      ([,, typeGettersEntry]) => typeGettersEntry.map(([getType]) => getType)
+      ([,, typeNodesEntry]) => typeNodesEntry.map(([typeNode]) => typeNode)
     %}
 
 argDefList
@@ -522,8 +488,9 @@ genericParamDefList
   -> "<" _ nonEmptyDeliminated[%userType _ (%of _ type _):?, "," _, ("," _):?] ">" {%
     ([,, entries]) => (
       entries.map(([identifier,, typeEntry]) => {
-        const [,, getConstraint] = typeEntry ?? [,, () => types.createUnknown()]
-        return { identifier: identifier.value, getConstraint, identPos: asPos(identifier), constraintPos: DUMMY_POS }
+        const [,, constraintNode = nodes.type.simpleType(DUMMY_POS, { typeName: '#unknown' })] = typeEntry ?? []
+        // FIXME: It's possible that after "pos" stuuff has been refactored, this constraintPos will become unused
+        return { identifier: identifier.value, constraintNode, identPos: asPos(identifier), constraintPos: DUMMY_POS }
       })
     )
   %}

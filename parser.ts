@@ -26,13 +26,18 @@ interface ModuleInfo {
 class ParseError extends Error {}
 
 function expectErrorOfTypes<T>(callback: () => T, errorTypes: (new (...args: unknown[]) => Error)[]): T {
+  const allKnownSpecialErrors: (new (...args: unknown[]) => Error)[] = [SemanticError, BadSyntaxError, ParseError]
+  if (errorTypes.length > 0 && errorTypes.some(ErrorType => !allKnownSpecialErrors.includes(ErrorType))) throw new Error()
+
   try {
     return callback()
   } catch (err) {
     if (errorTypes.some(ErrorType => err instanceof ErrorType)) {
       throw err
-    } else {
+    } else if (allKnownSpecialErrors.some(SpecialError => err instanceof SpecialError)) {
       throw new Error(`Internal error: Received an unexpected error of type ${err.constructor.name}:\n${err.message}`)
+    } else {
+      throw err
     }
   }
 }
