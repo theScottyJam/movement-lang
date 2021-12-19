@@ -7,20 +7,19 @@ import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
 import * as RtRespState from '../language/RtRespState'
 import * as values from '../language/values'
-import * as TypeState from '../language/TypeState'
-import * as RespState from '../language/RespState'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
+import * as InwardTypeState from '../language/InwardTypeState'
 import { PURITY } from '../language/constants'
+import { pipe } from '../util'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
 type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
-type TypeState = TypeState.TypeState
-type RespState = RespState.RespState
 type AnyType = Type.AnyType
+type InwardTypeState = InwardTypeState.InwardTypeState
 
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 
@@ -32,11 +31,11 @@ interface GenericParamDefinition {
 
 interface IntPayload { value: bigint }
 export const int = (pos: Position, payload: IntPayload) =>
-  InstructionNode.create<IntPayload, {}>('int', pos, payload)
+  InstructionNode.create<IntPayload>('int', pos, payload)
 
 InstructionNode.register<IntPayload, {}>('int', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createInt(value) }),
-  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createInt() }),
+  typeCheck: (actions, inwardState) => () => ({ type: types.createInt() }),
 })
 
 const parseEscapeSequences = (rawStr: string, pos: Position) => {
@@ -68,43 +67,42 @@ const parseEscapeSequences = (rawStr: string, pos: Position) => {
 interface StringPayload { value: string }
 interface StringOpts { uninterpretedValue: string }
 export const string = (pos: Position, { uninterpretedValue }: StringOpts) =>
-  InstructionNode.create<StringPayload, {}>('string', pos, {
+  InstructionNode.create<StringPayload>('string', pos, {
     value: parseEscapeSequences(uninterpretedValue, pos),
   })
 
 InstructionNode.register<StringPayload, {}>('string', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createString(value) }),
-  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createString() }),
+  typeCheck: (actions, inwardState) => ({ value }) => ({ type: types.createString() }),
 })
 
 interface BooleanPayload { value: boolean }
 export const boolean = (pos: Position, payload: BooleanPayload) =>
-  InstructionNode.create<BooleanPayload, {}>('boolean', pos, payload)
+  InstructionNode.create<BooleanPayload>('boolean', pos, payload)
 
 InstructionNode.register<BooleanPayload, {}>('boolean', {
   exec: (rt, { value }) => ({ rtRespState: RtRespState.create(), value: values.createBoolean(value) }),
-  typeCheck: (state, { value }) => ({ respState: RespState.create(), type: types.createBoolean() }),
+  typeCheck: (actions, inwardState) => ({ value }) => ({ type: types.createBoolean() }),
 })
 
 // TODO: Use genericParamDefList
 interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode }
 interface TagTypePayload { type: types.TagType }
 export const tag = (pos: Position, payload: TagPayload) =>
-  InstructionNode.create<TagPayload, TagTypePayload>('tag', pos, payload)
+  InstructionNode.create<TagPayload>('tag', pos, payload)
 
 InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   exec: (rt, { type }) => ({
     rtRespState: RtRespState.create(),
     value: values.createTag(type),
   }),
-  typeCheck: (state, { typeNode }) => {
-    const { respState, type: boxedType } = TypeNode.typeCheck(typeNode, state)
+  typeCheck: (actions, inwardState) => ({ typeNode }) => {
+    const { type: boxedType } = actions.checkType(TypeNode, typeNode, inwardState)
     const type = types.createTag({
       tagSentinel: Symbol('tag'),
       boxedType,
     })
     return {
-      respState: respState,
       type,
       typePayload: { type }
     }
@@ -115,7 +113,7 @@ interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredType
 interface RecordPayload { content: Map<string, RecordValueDescription> }
 interface RecordTypePayload { finalType: types.RecordType }
 export const record = (pos: Position, payload: RecordPayload) =>
-  InstructionNode.create<RecordPayload, RecordTypePayload>('record', pos, payload)
+  InstructionNode.create<RecordPayload>('record', pos, payload)
 
 InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
   exec: (rt, { content, finalType }) => {
@@ -132,22 +130,19 @@ InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
       value: values.createRecord(nameToValue, assertNotNullish(finalType))
     }
   },
-  typeCheck: (state, { content }) => {
+  typeCheck: (actions, inwardState) => ({ content }) => {
     const nameToType = new Map<string, AnyType>()
-    const respStates = []
     for (const [name, { target, maybeRequiredTypeNode }] of content) {
-      const { respState, type } = InstructionNode.typeCheck(target, state)
-      respStates.push(respState)
-      const maybeRequiredTypeResp = maybeRequiredTypeNode ? TypeNode.typeCheck(maybeRequiredTypeNode, state) : null
-      if (maybeRequiredTypeResp) {
-        respStates.push(maybeRequiredTypeResp.respState)
-        Type.assertTypeAssignableTo(type, maybeRequiredTypeResp.type, target.pos)
+      const targetType = actions.checkType(InstructionNode, target, inwardState).type
+      const maybeRequiredType = maybeRequiredTypeNode ? actions.checkType(TypeNode, maybeRequiredTypeNode, inwardState).type : null
+      if (maybeRequiredType) {
+        Type.assertTypeAssignableTo(targetType, maybeRequiredType, target.pos)
       }
-      const finalType = maybeRequiredTypeResp ? maybeRequiredTypeResp.type : type
+      const finalType = maybeRequiredType ?? targetType
       nameToType.set(name, finalType)
     }
     const finalType = types.createRecord({ nameToType })
-    return { respState: RespState.merge(...respStates), type: finalType, typePayload: { finalType } }
+    return { type: finalType, typePayload: { finalType } }
   },
 })
 
@@ -163,7 +158,7 @@ interface FunctionTypePayload {
   capturedStates: readonly string[]
 }
 export const function_ = (pos: Position, payload: FunctionPayload) =>
-  InstructionNode.create<FunctionPayload, FunctionTypePayload>('function', pos, payload)
+  InstructionNode.create<FunctionPayload>('function', pos, payload)
 
 InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
   exec: (rt, { params, body, finalType, capturedStates }) => ({
@@ -177,80 +172,77 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
       assertNotNullish(finalType),
     )
   }),
-  typeCheck: (outerState, { pos, params, body, maybeBodyTypeNode, purity, genericParamDefList }) => {
-    let state = TypeState.create({
-      scopes: [...outerState.scopes, { forFn: Symbol(), typeLookup: new Map() }],
-      definedTypes: [...outerState.definedTypes, new Map()],
-      minPurity: purity,
-      isBeginBlock: false,
-      behaviors: outerState.behaviors,
-      isMainModule: outerState.isMainModule,
-      moduleDefinitions: outerState.moduleDefinitions,
-      moduleShapes: outerState.moduleShapes,
-      importStack: outerState.importStack,
-      stdLibShape: outerState.stdLibShape,
-    })
-
-    // Adding generic params to type scope
-    const genericParamTypes = []
-    const respStates = []
-    for (const { identifier, constraintNode, identPos } of genericParamDefList) {
-      const { respState, type: constraint__ } = TypeNode.typeCheck(constraintNode, state)
-      respStates.push(respState)
-      const constraint_ = Type.assertIsConcreteType(constraint__) // FIXME: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function definition.
-      const constraint = Type.createParameterType({
-        constrainedBy: constraint_,
-        parameterName: constraint_.reprOverride ?? 'UNKNOWN', // TODO: This UNKNOWN type shouldn't be a thing. Perhaps I shouldn't have had this parameterName idea.
-      })
-      genericParamTypes.push(constraint)
-      state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
-    }
-
-    // Validating parameters
-    const paramTypes = []
-    for (const param of params) {
-      const { respState, type } = AssignmentTargetNode.contextlessTypeCheck(param, state)
-      paramTypes.push(type)
-      respStates.push(RespState.update(respState, { declarations: [] }))
-      state = TypeState.applyDeclarations(state, respState)
-    }
-
-    // Type checking body
-    const { respState: bodyRespState, type: bodyType } = InstructionNode.typeCheck(body, state)
-
-    // Getting declared body type
-    const requiredBodyTypeResp = maybeBodyTypeNode ? TypeNode.typeCheck(maybeBodyTypeNode, state) : null
-    if (requiredBodyTypeResp) Type.assertTypeAssignableTo(bodyType, requiredBodyTypeResp.type, pos, `This function can return type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyTypeResp.type)} was expected.`)
-    const capturedStates = bodyRespState.outerFnVars
-
-    // Checking if calculated return types line up with declared body type
-    if (requiredBodyTypeResp) {
-      respStates.push(requiredBodyTypeResp.respState)
-      for (const { type, pos } of bodyRespState.returnTypes) {
-        Type.assertTypeAssignableTo(type, requiredBodyTypeResp.type, pos)
-      }
-    }
-
-    // Finding widest return type
-    const allReturnTypes = [...bodyRespState.returnTypes.map(typeInfo => typeInfo.type), bodyType]
-      .filter(type => !types.isEffectivelyNever(type))
-    const returnType = requiredBodyTypeResp?.type ?? (
-      allReturnTypes.length === 0 // true when all paths lead to #never (and got filtered out)
-        ? types.createNever()
-        : Type.getWiderType(allReturnTypes, 'Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation.', pos)
+  typeCheck: (actions, inwardState_) => ({ pos, params, body, maybeBodyTypeNode, purity, genericParamDefList }) => {
+    type WrapParams<T> = [
+      Parameters<typeof actions.withFunctionDefinition>[0],
+      (inwardState: InwardTypeState) => T,
+    ]
+    const wrap = <T>(...[withFunctionDefinitionOpts, callback]: WrapParams<T>) => (
+      actions.follow.withScope({ forFn: Symbol() }, () => (
+        actions.withFunctionDefinition(withFunctionDefinitionOpts, callback)
+      ))
     )
+    
+    const { finalType, capturedStates } = wrap({ inwardState: inwardState_, minPurity: purity }, inwardState => {
+      // Adding generic params to type scope
+      const genericParamTypes = []
+      for (const { identifier, constraintNode, identPos } of genericParamDefList) {
+        const constraint = pipe(
+          actions.checkType(TypeNode, constraintNode, inwardState).type,
+          $=> Type.assertIsConcreteType($), // TODO: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function definition.
+          $=> Type.createParameterType({
+            constrainedBy: $,
+            parameterName: $.reprOverride ?? 'UNKNOWN', // TODO: This UNKNOWN type shouldn't be a thing. Perhaps I shouldn't have had this parameterName idea.
+          })
+        )
+        genericParamTypes.push(constraint)
+        actions.follow.addToScopeInTypeNamespace(identifier, () => constraint, identPos)
+      }
 
-    const finalType = types.createFunction({
-      paramTypes,
-      genericParamTypes,
-      bodyType: returnType,
-      purity,
+      // Validating parameters
+      const paramTypes = []
+      for (const param of params) {
+        const { type } = actions.checkType(AssignmentTargetNode, param, inwardState, {
+          incomingType: AssignmentTargetNode.noTypeIncoming,
+          export: false,
+        })
+        paramTypes.push(type)
+      }
+
+      // Type checking body
+      const { respState: bodyRespState, type: bodyType } = actions.checkType(InstructionNode, body, inwardState)
+
+      // Getting declared body type
+      const requiredBodyType = maybeBodyTypeNode ? actions.checkType(TypeNode, maybeBodyTypeNode, inwardState).type : null
+      if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can return type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
+
+      // Checking if calculated return types line up with declared body type
+      if (requiredBodyType) {
+        for (const { type, pos } of bodyRespState.returnTypes) {
+          Type.assertTypeAssignableTo(type, requiredBodyType, pos)
+        }
+      }
+
+      // Finding widest return type
+      const allReturnTypes = [...bodyRespState.returnTypes.map(typeInfo => typeInfo.type), bodyType]
+        .filter(type => !types.isEffectivelyNever(type))
+      const returnType = requiredBodyType ?? (
+        allReturnTypes.length === 0 // true when all paths lead to #never (and got filtered out)
+          ? types.createNever()
+          : Type.getWiderType(allReturnTypes, 'Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation.', pos)
+      )
+
+      const finalType = types.createFunction({
+        paramTypes,
+        genericParamTypes,
+        bodyType: returnType,
+        purity,
+      })
+
+      return { finalType, capturedStates: bodyRespState.outerFnVars }
     })
 
-    const finalRespState = RespState.merge(...respStates, bodyRespState)
-    const newOuterScopeVars = finalRespState.outerFnVars.filter(ident => TypeState.lookupVar(outerState, ident).fromOuterFn)
     return {
-      respState: RespState.update(finalRespState, { outerFnVars: newOuterScopeVars }),
       type: finalType,
       typePayload: { finalType, capturedStates }
     }

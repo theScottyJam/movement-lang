@@ -1,25 +1,24 @@
 import type { Token } from 'moo'
 import * as InstructionNode from './variants/InstructionNode';
 import * as TypeNode from './variants/TypeNode';
+import type { Actions } from './helpers/typeCheckTools'
 import { SemanticError } from '../language/exceptions'
 import * as Position from '../language/Position'
-import * as TypeState from '../language/TypeState'
-import * as RespState from '../language/RespState'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
 import { PURITY } from '../language/constants'
+import { pipe } from '../util'
 
 type AnyTypeNode = TypeNode.AnyTypeNode
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type Position = Position.Position
-type TypeState = TypeState.TypeState
 type AnyType = Type.AnyType
 
 const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
 type ValueOf<T> = T[keyof T]
 
-const mapMapValues = (map, mapFn) => (
+const mapMapValues = <T, U, V>(map: Map<T, U>, mapFn: (value: U) => V) => (
   new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
 )
 
@@ -28,7 +27,7 @@ export const simpleType = (pos: Position, payload: SimpleTypePayload) =>
   TypeNode.create<SimpleTypePayload>('simpleType', pos, payload)
 
 TypeNode.register<SimpleTypePayload>('simpleType', {
-  typeCheck: (state, { pos, typeName }) => {
+  typeCheck: (actions, inwardState) => ({ pos, typeName }) => {
     const type = {
       '#unit': () => types.createUnit(),
       '#int': () => types.createInt(),
@@ -40,7 +39,7 @@ TypeNode.register<SimpleTypePayload>('simpleType', {
 
     if (type == null) throw new SemanticError(`Invalid built-in type ${typeName}`, pos)
 
-    return { respState: RespState.create(), type }
+    return { type }
   },
 })
 
@@ -49,11 +48,10 @@ export const userTypeLookup = (pos: Position, payload: UserTypeLookupPayload) =>
   TypeNode.create<UserTypeLookupPayload>('userTypeLookup', pos, payload)
 
 TypeNode.register<UserTypeLookupPayload>('userTypeLookup', {
-  typeCheck: (state, { pos, typeName }) => {
-    const typeInfo = TypeState.lookupType(state, typeName)
+  typeCheck: (actions, inwardState) => ({ pos, typeName }) => {
+    const typeInfo = actions.follow.lookupType(typeName)
     if (!typeInfo) throw new SemanticError(`Type "${typeName}" not found.`, pos)
     return {
-      respState: RespState.create(),
       type: Type.withName(typeInfo.createType(), typeName),
     }
   },
@@ -64,16 +62,15 @@ export const evaluateExprType = (pos: Position, payload: EvaluateExprTypePayload
   TypeNode.create<EvaluateExprTypePayload>('evaluateExprType', pos, payload)
 
 TypeNode.register<EvaluateExprTypePayload>('evaluateExprType', {
-  typeCheck: (state, { pos, expr }) => {
-    const { respState, type } = InstructionNode.typeCheck(expr, state)
-    return {
-      respState: RespState.update(respState, {
-        // Since we're never going to execute this instruction node,
-        // it won't have real runtime dependencies on outer function variables.
-        outerFnVars: [],
-      }),
-      type: Type.getTypeMatchingDescendants(type, pos)
-    }
+  typeCheck: (actions, inwardState) => ({ pos, expr }) => {
+    const type = actions.noExecZone(() => {
+      return pipe(
+        actions.checkType(InstructionNode, expr, inwardState).type,
+        $=> Type.getTypeMatchingDescendants($, pos)
+      )
+    })
+
+    return { type }
   },
 })
 
@@ -82,13 +79,9 @@ export const recordType = (pos: Position, payload: RecordTypePayload) =>
   TypeNode.create<RecordTypePayload>('recordType', pos, payload)
 
 TypeNode.register<RecordTypePayload>('recordType', {
-  typeCheck: (state, { nameToTypeNode }) => {
-    const typeCheckResponses = mapMapValues(nameToTypeNode, typeNode => TypeNode.typeCheck(typeNode, state))
-
-    return {
-      respState: RespState.merge(...Object.values(typeCheckResponses).map(resp => resp.respState)),
-      type: types.createRecord({ nameToType: mapMapValues(typeCheckResponses, resp => resp.type) })
-    }
+  typeCheck: (actions, inwardState) => ({ nameToTypeNode }) => {
+    const nameToType = mapMapValues(nameToTypeNode, typeNode => actions.checkType(TypeNode, typeNode, inwardState).type)
+    return { type: types.createRecord({ nameToType }) }
   },
 })
 
@@ -106,32 +99,29 @@ export const functionType = (pos: Position, payload: FunctionTypePayload) =>
   TypeNode.create<FunctionTypePayload>('functionType', pos, payload)
 
 TypeNode.register<FunctionTypePayload>('functionType', {
-  typeCheck: (state, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode }) => {
+  typeCheck: (actions, inwardState) => ({ purity, genericParamDefList, paramTypeNodes, bodyTypeNode }) => {
     const constraints = []
-    const respStates = []
     for (const { identifier, constraintNode, identPos } of genericParamDefList) {
-      const { respState, type: constraint__ } = TypeNode.typeCheck(constraintNode, state)
-      respStates.push(respState)
-      const constraint_ = Type.assertIsConcreteType(constraint__) // FIXME: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function type definition.
-      const constraint = Type.createParameterType({
-        constrainedBy: constraint_,
-        parameterName: constraint_.reprOverride ?? 'UNKNOWN' // TODO: This parameterName was probably a bad idea.
-      })
+      const constraint = pipe(
+        actions.checkType(TypeNode, constraintNode, inwardState).type,
+        $=> Type.assertIsConcreteType($), // TODO: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function type definition.
+        $=> Type.createParameterType({
+          constrainedBy: $,
+          parameterName: $.reprOverride ?? 'UNKNOWN' // TODO: This parameterName was probably a bad idea.
+        })
+      )
       constraints.push(constraint)
-      state = TypeState.addToTypeScope(state, identifier, () => constraint, identPos)
+      actions.follow.addToScopeInTypeNamespace(identifier, () => constraint, identPos)
     }
 
-    const paramResponses = paramTypeNodes.map(paramTypeNode => TypeNode.typeCheck(paramTypeNode, state)) //!! RespState
-    respStates.push(...paramResponses.map(resp => resp.respState))
-    const bodyTypeResp = TypeNode.typeCheck(bodyTypeNode, state)
-    respStates.push(bodyTypeResp.respState)
+    const paramTypes = paramTypeNodes.map(paramTypeNode => actions.checkType(TypeNode, paramTypeNode, inwardState).type)
+    const bodyType = actions.checkType(TypeNode, bodyTypeNode, inwardState).type
 
     return {
-      respState: RespState.merge(...respStates),
       type: types.createFunction({
-        paramTypes: paramResponses.map(resp => resp.type),
+        paramTypes,
         genericParamTypes: constraints,
-        bodyType: bodyTypeResp.type,
+        bodyType,
         purity,
       })
     }
@@ -139,15 +129,10 @@ TypeNode.register<FunctionTypePayload>('functionType', {
 })
 
 // Mainly intended as a convenience for constructing the stdLib.
-interface nodeFromTypeGetterFnPayload { typeGetter: (state: TypeState) => AnyType }
-export const nodeFromTypeGetter = (pos: Position, payload: nodeFromTypeGetterFnPayload) =>
-  TypeNode.create<nodeFromTypeGetterFnPayload>('customTypeNode', pos, payload)
+interface NodeFromTypeGetterFnPayload { typeGetter: (actions: Actions) => AnyType }
+export const nodeFromTypeGetter = (pos: Position, payload: NodeFromTypeGetterFnPayload) =>
+  TypeNode.create<NodeFromTypeGetterFnPayload>('customTypeNode', pos, payload)
 
-TypeNode.register<nodeFromTypeGetterFnPayload>('customTypeNode', {
-  typeCheck: (state, { typeGetter }) => {
-    return {
-      respState: RespState.create(),
-      type: typeGetter(state)
-    }
-  },
+TypeNode.register<NodeFromTypeGetterFnPayload>('customTypeNode', {
+  typeCheck: (actions, inwardState) => ({ typeGetter }) => ({ type: typeGetter(actions) }),
 })

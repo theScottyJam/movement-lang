@@ -23,7 +23,6 @@
   import moo from 'moo'
   import * as Type from './language/Type'
   import * as types from './language/types'
-  import * as TypeState from './language/TypeState'
   import { PURITY } from './language/constants'
   import { from as asPos, range } from './language/Position'
   import { SemanticError } from './language/exceptions'
@@ -83,6 +82,7 @@
           'in': 'in',
           'print': 'print',
           '_printType': '_printType',
+          '_debug': '_debug',
           'if': 'if',
           'then': 'then',
           'else': 'else',
@@ -166,10 +166,10 @@ root
       const { imports, previousNode: firstNode } =
         makeImportNodes.reverse().reduce(({ imports, previousNode }, makeNode) => {
           const newNode = makeNode(previousNode)
-          return { imports: [...imports, newNode.payload.dependency], previousNode: newNode } // FIXME: I'm reaching into another node's internal data
+          return { imports: [...imports, newNode.payload.dependency], previousNode: newNode } // FIXME0: I'm reaching into another node's internal data
         }, { imports: [], previousNode: rootNodeWithoutImports })
-      return nodes.root({
-        content: firstNode,
+      return nodes.createApi({
+        content: nodes.moduleRoot(DUMMY_POS, { content: firstNode }),
         dependencies: imports,
       })
     }
@@ -179,11 +179,11 @@ importStatement
   -> "import" _ assignmentTarget _ "from" _ stringLiteral {%
     ([,, assignmentTarget,, ,, stringLiteral]) => nextNode => (
       nodes.importMeta(DUMMY_POS, {
-        from: stringLiteral.payload.value, // FIXME: I'm reaching into the data of something else.
+        from: stringLiteral.payload.value, // FIXME0: I'm reaching into the data of something else.
         childNode: nodes.declaration(DUMMY_POS, {
           declarations: [{
             assignmentTarget,
-            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.payload.value }), // FIXME: I'm reaching into the data of something else.
+            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.payload.value }), // FIXME0: I'm reaching into the data of something else.
             assignmentTargetPos: DUMMY_POS
           }],
           nextExpr: nextNode,
@@ -223,6 +223,11 @@ blockAndModuleLevelStatement[ALLOW_EXPORT]
   %} | "_printType" _ expr10 {%
     ([print,, r]) => nextNode => nodes.sequence([
       nodes.printType(range(print, r.pos), { r }),
+      nextNode,
+    ])
+  %} | "_debug" _ expr10 {%
+    ([debug,, r]) => nextNode => nodes.sequence([
+      nodes.showDebugOutput(range(debug, r.pos), { r }),
       nextNode,
     ])
   %} | ("export" _ $ALLOW_EXPORT):? "function" _ userValueIdentifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
@@ -285,6 +290,8 @@ expr10
     ([print, _, r]) => nodes.print(range(print, r.pos), { r })
   %} | "_printType" _ expr10 {%
     ([print, _, r]) => nodes.printType(range(print, r.pos), { r })
+  %} | "_debug" _ expr10 {%
+    ([debug, _, r]) => nodes.showDebugOutput(range(debug, r.pos), { r })
   %} | ("let" _ assignmentTarget _ "=" _ expr10 _):+ "in" _ expr10 {%
     ([declarationEntries, ,, expr]) => {
       const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
@@ -317,7 +324,7 @@ expr20
 
 expr30
   -> expr30 _ "as" _ type {%
-    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, typeNode, typePos: DUMMY_POS, operatorAndTypePos: DUMMY_POS })
+    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, typeNode, operatorAndTypePos: DUMMY_POS })
   %} | expr40 {% id %}
 
 expr40

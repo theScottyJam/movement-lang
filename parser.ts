@@ -5,7 +5,7 @@ import { BadSyntaxError, SemanticError } from './language/exceptions'
 import * as Type from './language/Type'
 import * as types from './language/types'
 import * as values from './language/values'
-import type { Root as AstRoot } from './nodes/variants/Root' // TODO: Maybe I need to move this type definition into a more accessible location
+import type { AstApi } from './nodes/variants/AstApi' // TODO: Maybe I need to move this type definition into a more accessible location
 import { createStdLibAst } from './stdLib/stdLib'
 import { formatParseError, prettyPrintLanguageError } from './errorFormatting'
 import builtGrammar from './grammar.built'
@@ -21,6 +21,7 @@ const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)
 interface ModuleInfo {
   readonly module: values.RecordValue
   readonly moduleShape: types.RecordType
+  readonly typeCheckContexts: Map<symbol, unknown>
 }
 
 class ParseError extends Error {}
@@ -42,7 +43,7 @@ function expectErrorOfTypes<T>(callback: () => T, errorTypes: (new (...args: unk
   }
 }
 
-function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): AstRoot {
+function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): AstApi {
   // A fresh parser needs to be made between each parse.
   const parser = new nearley.Parser(compiledGrammar);
 
@@ -70,7 +71,7 @@ interface RecursiveParseOpts {
 }
 function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts = {}) {
   loadModuleSource ??= modulePath => fs.readFileSync(modulePath, 'utf-8')
-  const moduleDefinitions = new Map<string, AstRoot>()
+  const moduleDefinitions = new Map<string, AstApi>()
   const startingPath = path.normalize(path_)
   const pathsToLoad = [startingPath]
   while (pathsToLoad.length) {
@@ -89,8 +90,15 @@ function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts =
 }
 
 function runStdLib(): ModuleInfo {
+  if (globalThis.skipStdLib) {
+    return {
+      module: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() })),
+      moduleShape: types.createRecord({ nameToType: new Map() }),
+      typeCheckContexts: new Map(),
+    }
+  }
   const ast = createStdLibAst()
-  const moduleShape = ast.typeCheck({
+  const { typeCheckContexts, type: moduleShape } = ast.typeCheck({
     moduleDefinitions: new Map(),
     importStack: ['%stdLib%'],
     stdLibShape: types.createRecord({ nameToType: new Map() }),
@@ -98,9 +106,10 @@ function runStdLib(): ModuleInfo {
   })
   const module = ast.exec({
     moduleDefinitions: new Map(),
-    stdLib: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() }))
+    stdLib: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() })),
+    typeCheckContexts,
   })
-  return { module, moduleShape }
+  return { module, moduleShape, typeCheckContexts }
 }
 
 export function loadAndTypeCheck(fileToRun: string, { stdLib = runStdLib() }: { stdLib: ModuleInfo } = { stdLib: null }) {
@@ -110,24 +119,33 @@ export function loadAndTypeCheck(fileToRun: string, { stdLib = runStdLib() }: { 
   )
 
   const ast = moduleDefinitions.get(startingPath)
-  const moduleShape = expectErrorOfTypes(() => ast.typeCheck({
+  const { typeCheckContexts, type: moduleShape } = expectErrorOfTypes(() => ast.typeCheck({
     moduleDefinitions,
     importStack: [startingPath],
     stdLibShape: stdLib.moduleShape,
     isMainModule: true,
   }), [SemanticError])
 
-  return { startingPath, moduleDefinitions, mainModuleShape: moduleShape }
+  return {
+    startingPath,
+    moduleDefinitions,
+    typeCheckContexts: new Map([
+      ...typeCheckContexts.entries(),
+      ...stdLib.typeCheckContexts.entries(),
+    ]),
+    mainModuleShape: moduleShape
+  }
 }
 
 // The main run() function. Errors are already caught, pretty-printed, and not rethrown.
 // So, don't expect errors from this function.
-export function run(fileToRun: string): ModuleInfo | null {
+export function run(fileToRun: string) {
   const stdLib = runStdLib()
   try {
     const {
       startingPath,
       moduleDefinitions,
+      typeCheckContexts,
       mainModuleShape: moduleShape
     } = loadAndTypeCheck(fileToRun, { stdLib })
 
@@ -135,6 +153,7 @@ export function run(fileToRun: string): ModuleInfo | null {
     const module = expectErrorOfTypes(() => ast.exec({
       moduleDefinitions,
       stdLib: stdLib.module,
+      typeCheckContexts,
     }), [])
     return { module, moduleShape }
   } catch (err) {
@@ -158,10 +177,10 @@ export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { mo
     }
   })
 
-  const { module: stdLib, moduleShape: stdLibShape } = runStdLib()
+  const { module: stdLib, moduleShape: stdLibShape, typeCheckContexts: stdLibTypeCheckContexts } = runStdLib()
 
   const ast = moduleDefinitions.get(startingPath)
-  ast.typeCheck({
+  const { typeCheckContexts } = ast.typeCheck({
     behaviors: {
       showDebugTypeOutput: type => result.push(Type.repr(type))
     },
@@ -169,12 +188,14 @@ export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { mo
     importStack: [startingPath],
     stdLibShape,
   })
+
   ast.exec({
     behaviors: {
       showDebugOutput: value => result.push(value)
     },
     moduleDefinitions,
-    stdLib
+    stdLib,
+    typeCheckContexts: new Map([...typeCheckContexts, ...stdLibTypeCheckContexts]),
   })
 
   return result

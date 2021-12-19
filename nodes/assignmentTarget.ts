@@ -11,8 +11,6 @@ import {
 import { SemanticError, RuntimeError } from '../language/exceptions'
 import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
-import * as TypeState from '../language/TypeState'
-import * as RespState from '../language/RespState'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
 
@@ -21,8 +19,6 @@ type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
 type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
-type TypeState = TypeState.TypeState
-type RespState = RespState.RespState
 type AnyType = Type.AnyType
 
 const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
@@ -33,10 +29,10 @@ interface BindPayload {
   readonly identPos: Position
 }
 interface BindTypePayload {
-  readonly typeConstraint: AnyType
+  readonly typeConstraint: AnyType | null
 }
 export const bind = (pos: Position, { identifier, maybeTypeConstraintNode, identPos }: BindPayload) =>
-  AssignmentTargetNode.create<BindPayload, BindTypePayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos })
+  AssignmentTargetNode.create<BindPayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos })
 
 AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
   exec: (rt, { identifier, typeConstraint }, { incomingValue, allowFailure = false }) => {
@@ -46,49 +42,40 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
     }
     return [{ identifier, value: incomingValue }]
   },
-  typeCheck: (state, { identifier, maybeTypeConstraintNode, identPos }, { incomingType, allowWidening = false, export: export_ = false }) => {
-    const maybeTypeConstraintResp = maybeTypeConstraintNode ? TypeNode.typeCheck(maybeTypeConstraintNode, state) : null
-    if (incomingType === AssignmentTargetNode.missingType && !maybeTypeConstraintResp) {
-      throw new SemanticError("Could not auto-determine the type of this record field, please specify it with a type constraint.", DUMMY_POS)
+  typeCheck: (actions, inwardState) => ({ pos, identifier, maybeTypeConstraintNode, identPos }, { incomingType, allowWidening, export: export_ }) => {
+    if (incomingType === AssignmentTargetNode.noTypeIncoming && !maybeTypeConstraintNode) {
+      throw new SemanticError('Could not auto-determine the type of this lvalue, please specify it with a type constraint.', pos)
     }
-    if (maybeTypeConstraintResp && incomingType !== AssignmentTargetNode.missingType && !Type.isTypeAssignableTo(incomingType, maybeTypeConstraintResp.type)) {
+
+    const maybeTypeConstraint = maybeTypeConstraintNode ? actions.checkType(TypeNode, maybeTypeConstraintNode, inwardState).type : null
+
+    if (maybeTypeConstraint && incomingType !== AssignmentTargetNode.noTypeIncoming && !Type.isTypeAssignableTo(incomingType, maybeTypeConstraint)) {
       if (!allowWidening) {
-        throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(maybeTypeConstraintResp.type)}".`, DUMMY_POS)
-      } else if (allowWidening && !Type.isTypeAssignableTo(maybeTypeConstraintResp.type, incomingType)) {
-        throw new SemanticError(`Attempted to change a type from "${Type.repr(incomingType)}" to type "${Type.repr(maybeTypeConstraintResp.type)}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
+        throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(maybeTypeConstraint)}".`, DUMMY_POS)
+      } else if (allowWidening && !Type.isTypeAssignableTo(maybeTypeConstraint, incomingType)) {
+        throw new SemanticError(`Attempted to change a type from "${Type.repr(incomingType)}" to type "${Type.repr(maybeTypeConstraint)}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
       }
     }
-    const finalType = maybeTypeConstraintResp ? maybeTypeConstraintResp.type : incomingType
-    if (finalType === AssignmentTargetNode.missingType) throw new Error('INTERNAL ERROR')
+
+    const finalType = maybeTypeConstraint ?? incomingType
+    if (finalType === AssignmentTargetNode.noTypeIncoming) throw new Error('INTERNAL ERROR')
+
+    actions.follow.addToScopeInValueNamespace(identifier, finalType, identPos)
     return {
-      respState: RespState.merge(
-        ...(maybeTypeConstraintResp ? [maybeTypeConstraintResp.respState] : []),
-        RespState.create({
-          declarations: [{ identifier, type: finalType, identPos }],
-          moduleShape: export_
-            ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
-            : types.createRecord({ nameToType: new Map() }),
-        })
-      ),
+      outward: {
+        moduleShape: export_
+          ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
+          : types.createRecord({ nameToType: new Map() }),
+      },
+      type: maybeTypeConstraint ?? types.createUnknown(),
+      typePayload: { typeConstraint: maybeTypeConstraint ?? null }
     }
   },
-  contextlessTypeCheck: (state, { pos, identifier, maybeTypeConstraintNode, identPos }) => {
-    if (!maybeTypeConstraintNode) throw new SemanticError('All function parameters must have a declared type', pos)
-    const typeConstraintResp = TypeNode.typeCheck(maybeTypeConstraintNode, state)
-    return {
-      respState: RespState.merge(
-        typeConstraintResp.respState,
-        RespState.create({ declarations: [{ identifier, type: typeConstraintResp.type, identPos }] })
-      ),
-      type: typeConstraintResp.type,
-      typePayload: { typeConstraint: typeConstraintResp.type }
-    }
-  }
 })
 
 interface DestructurObjPayload { entries: Map<string, AnyAssignmentTargetNode> }
 export const destructureObj = (pos: Position, { entries }: DestructurObjPayload) =>
-  AssignmentTargetNode.create<DestructurObjPayload, {}>('destructureRecord', pos, { entries })
+  AssignmentTargetNode.create<DestructurObjPayload>('destructureRecord', pos, { entries })
 
 AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
   exec: (rt, { entries }, { incomingValue, allowFailure = false }) => {
@@ -106,37 +93,25 @@ AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
     }
     return allBindings
   },
-  typeCheck: (state, { entries }, { incomingType, allowWidening = false, export: export_ = false }) => {
-    if (incomingType !== AssignmentTargetNode.missingType) Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
-    const respStates = []
-    for (const [identifier, assignmentTarget] of entries) {
-      let valueType = incomingType === AssignmentTargetNode.missingType || types.isEffectivelyNever(incomingType)
-        ? incomingType
-        : assertRecordInnerDataType(Type.assertIsConcreteType(incomingType).data).nameToType.get(identifier)
-      if (!valueType && allowWidening) valueType = AssignmentTargetNode.missingType
-      if (!valueType) {
-        if (incomingType === AssignmentTargetNode.missingType) throw new Error('INTERNAL ERROR')
-        throw new SemanticError(`Unable to destructure property ${identifier} from type ${Type.repr(incomingType)}`, DUMMY_POS)
-      }
-      const { respState } = AssignmentTargetNode.typeCheck(assignmentTarget, state, { incomingType: valueType, allowWidening, export: export_ })
-      respStates.push(respState)
-      state = TypeState.applyDeclarations(state, respState)
+  typeCheck: (actions, inwardState) => ({ entries }, { incomingType, allowWidening, export: export_ }) => {
+    if (incomingType !== AssignmentTargetNode.noTypeIncoming) {
+      Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
     }
-    return {
-      respState: RespState.merge(...respStates),
-    }
-  },
-  contextlessTypeCheck: (state, { entries }) => {
-    const respStates = []
+
     const nameToType = new Map()
     for (const [identifier, assignmentTarget] of entries) {
-      const { respState, type } = AssignmentTargetNode.contextlessTypeCheck(assignmentTarget, state)
-      respStates.push(respState)
-      state = TypeState.applyDeclarations(state, respState)
-      nameToType.set(identifier, type)
+      let valueType = incomingType === AssignmentTargetNode.noTypeIncoming || types.isEffectivelyNever(incomingType)
+        ? incomingType
+        : assertRecordInnerDataType(Type.assertIsConcreteType(incomingType).data).nameToType.get(identifier)
+      if (!valueType && allowWidening) valueType = AssignmentTargetNode.noTypeIncoming
+      if (!valueType) {
+        if (incomingType === AssignmentTargetNode.noTypeIncoming) throw new Error('INTERNAL ERROR')
+        throw new SemanticError(`Unable to destructure property ${identifier} from type ${Type.repr(incomingType)}`, DUMMY_POS)
+      }
+      const assignmentTargetType = actions.checkType(AssignmentTargetNode, assignmentTarget, inwardState, { incomingType: valueType, allowWidening, export: export_ }).type
+      nameToType.set(identifier, assignmentTargetType)
     }
     return {
-      respState: RespState.merge(...respStates),
       type: types.createRecord({ nameToType }),
     }
   },
@@ -144,49 +119,39 @@ AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
 
 interface DestructureTaggedPayload { tag: AnyInstructionNode, innerContent: AnyAssignmentTargetNode }
 export const destructureTagged = (pos: Position, { tag, innerContent }: DestructureTaggedPayload) =>
-  AssignmentTargetNode.create<DestructureTaggedPayload, {}>('destructureTagged', pos, { tag, innerContent })
+  AssignmentTargetNode.create<DestructureTaggedPayload>('destructureTagged', pos, { tag, innerContent })
 
 AssignmentTargetNode.register<DestructureTaggedPayload, {}>('destructureTagged', {
-  exec: (rt, { pos, tag, innerContent }, { incomingValue, allowFailure = false }) => {
+  exec: (rt, { tag, innerContent }, { incomingValue, allowFailure = false }) => {
     if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
     const { value: tagValue } = InstructionNode.exec(tag, rt)
     if (!Type.isTypeAssignableTo(incomingValue.type, Type.getTypeMatchingDescendants(tagValue.type, DUMMY_POS))) return null
     const innerValue = assertRawTaggedValue(incomingValue.raw)
     return AssignmentTargetNode.exec(innerContent, rt, { incomingValue: innerValue, allowFailure })
   },
-  typeCheck: (state, { tag, innerContent }, { incomingType, allowWidening = false, export: export_ = false }) => {
-    const { respState: respState1, type: tagType } = InstructionNode.typeCheck(tag, state)
-    assertTagInnerDataType(Type.assertIsConcreteType(tagType).data)
-    if (incomingType !== AssignmentTargetNode.missingType) {
-      Type.assertTypeAssignableTo(incomingType, types.createTagged({ tag: tagType as types.TagType }), DUMMY_POS)
+  typeCheck: (actions, inwardState) => ({ pos, tag, innerContent }, { incomingType, allowWidening, export: export_ }) => {
+    const tagType = actions.checkType(InstructionNode, tag, inwardState).type
+    const tagInnerData = assertTagInnerDataType(Type.assertIsConcreteType(tagType).data)
+    const finalType = types.createTagged({ tag: tagType as types.TagType })
+    if (incomingType !== AssignmentTargetNode.noTypeIncoming) {
+      Type.assertTypeAssignableTo(incomingType, finalType, DUMMY_POS)
     }
-    const { respState: respState2 } = AssignmentTargetNode.typeCheck(innerContent, state, {
-      incomingType: incomingType === AssignmentTargetNode.missingType || types.isEffectivelyNever(incomingType)
+    const innerContentType = actions.checkType(AssignmentTargetNode, innerContent, inwardState, {
+      incomingType: incomingType === AssignmentTargetNode.noTypeIncoming || types.isEffectivelyNever(incomingType)
         ? incomingType
         : (incomingType as types.TaggedType).data.tag.data.boxedType,
       allowWidening,
       export: export_,
-    })
+    }).type
+    Type.assertTypeAssignableTo(tagInnerData.boxedType, innerContentType, pos)
 
-    return {
-      respState: RespState.merge(respState1, respState2),
-    }
-  },
-  contextlessTypeCheck: (state, { pos, tag, innerContent }) => {
-    const { respState: respState1, type: tagType } = InstructionNode.typeCheck(tag, state)
-    const { respState: respState2, type: innerContentType } = AssignmentTargetNode.contextlessTypeCheck(innerContent, state)
-    state = TypeState.applyDeclarations(state, respState2)
-    Type.assertTypeAssignableTo(innerContentType, assertTagInnerDataType(Type.assertIsConcreteType(tagType).data).boxedType, pos)
-    return {
-      respState: RespState.merge(respState1, respState2),
-      type: types.createTagged({ tag: tagType as types.TagType }),
-    }
+    return { type: finalType }
   },
 })
 
 interface ValueConstraintPayload { assignmentTarget: AnyAssignmentTargetNode, constraint: AnyInstructionNode }
 export const valueConstraint = (pos: Position, { assignmentTarget, constraint }: ValueConstraintPayload) =>
-  AssignmentTargetNode.create<ValueConstraintPayload, {}>('valueConstraint', pos, { assignmentTarget, constraint })
+  AssignmentTargetNode.create<ValueConstraintPayload>('valueConstraint', pos, { assignmentTarget, constraint })
 
 AssignmentTargetNode.register<ValueConstraintPayload, {}>('valueConstraint', {
   exec: (rt, { assignmentTarget, constraint }, { incomingValue, allowFailure = false }) => {
@@ -200,23 +165,12 @@ AssignmentTargetNode.register<ValueConstraintPayload, {}>('valueConstraint', {
     }
     return bindings
   },
-  typeCheck: (state, { assignmentTarget, constraint }, { incomingType, allowWidening = false, export: export_ = false }) => {
-    const { respState } = AssignmentTargetNode.typeCheck(assignmentTarget, state, { incomingType, allowWidening, export: export_ })
-    state = TypeState.applyDeclarations(state, respState)
-    const { respState: respState2, type } = InstructionNode.typeCheck(constraint, state)
-    Type.assertTypeAssignableTo(type, types.createBoolean(), DUMMY_POS)
+  typeCheck: (actions, inwardState) => ({ assignmentTarget, constraint }, { incomingType, allowWidening, export: export_ }) => {
+    const assignmentTargetType = actions.checkType(AssignmentTargetNode, assignmentTarget, inwardState, { incomingType, allowWidening, export: export_ }).type
+    const typeConstraintType = actions.checkType(InstructionNode, constraint, inwardState).type
+    Type.assertTypeAssignableTo(typeConstraintType, types.createBoolean(), DUMMY_POS)
     return {
-      respState: RespState.merge(respState, respState2)
+      type: assignmentTargetType,
     }
   },
-  contextlessTypeCheck: (state, { assignmentTarget, constraint }) => {
-    const { respState, type } = AssignmentTargetNode.contextlessTypeCheck(assignmentTarget, state)
-    state = TypeState.applyDeclarations(state, respState)
-    const { respState: respState2, type: type2 } = InstructionNode.typeCheck(constraint, state)
-    Type.assertTypeAssignableTo(type2, types.createBoolean(), DUMMY_POS)
-    return {
-      respState: RespState.merge(respState, respState2),
-      type,
-    }
-  }
 })

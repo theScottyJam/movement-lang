@@ -2,8 +2,6 @@ import type { Token } from 'moo'
 import * as Position from '../language/Position'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
-import * as TypeState from '../language/TypeState'
-import * as RespState from '../language/RespState'
 import * as RtRespState from '../language/RtRespState'
 import * as Value from '../language/Value'
 import * as values from '../language/values'
@@ -60,20 +58,17 @@ const construct = {
           value: fn(rt, ...args),
         }
       },
-      typeCheck: (state, { returnTypeNode, dependencies }) => {
-        const { respState, type } = TypeNode.typeCheck(returnTypeNode, state)
+      typeCheck: (actions, inwardState) => ({ returnTypeNode, dependencies }) => {
+        const type = actions.checkType(TypeNode, returnTypeNode, inwardState).type
         return {
-          respState: RespState.merge(
-            respState,
-            RespState.create({ outerFnVars: dependencies }),
-          ),
-          type
+          outward: { outerFnVars: dependencies },
+          type,
         }
       },
     })
 
     return ({ argCount, returnTypeNode, dependencies, fn }: InstructionNodePayload) =>
-      InstructionNode.create<InstructionNodePayload, {}>(jsFnBodyName, DUMMY_POS, { argCount, returnTypeNode, dependencies, fn })
+      InstructionNode.create<InstructionNodePayload>(jsFnBodyName, DUMMY_POS, { argCount, returnTypeNode, dependencies, fn })
     })(),
 
   record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
@@ -104,8 +99,8 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
   stdLibDef.Mutable = construct.record((() => {
     const MutableDef: any = {}
     const mutableTagTypeNode = (varName: string) => nodes.type.nodeFromTypeGetter(DUMMY_POS, {
-      typeGetter: (state: TypeState.TypeState) =>
-        Type.getTypeMatchingDescendants(TypeState.lookupVar(state, varName).type, DUMMY_POS)
+      typeGetter: actions =>
+        Type.getTypeMatchingDescendants(actions.follow.lookupVar(varName).type, DUMMY_POS)
     })
     
     MutableDef.create = construct.fn({
@@ -147,28 +142,30 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
 
 export const createStdLibAst = () => {
   const { public: public_, private: private_ } = createStdLibMapping()
-  return nodes.root({
-    dependencies: [],
-    content: nodes.declaration(DUMMY_POS, {
-      declarations: Object.entries(private_)
-        .map(([key, value]) => ({
-          assignmentTarget: construct.bind(key),
-          expr: value,
-          assignmentTargetPos: DUMMY_POS
-        })),
-      nextExpr: nodes.declaration(DUMMY_POS, {
-        declarations: Object.entries(public_)
-          .map(([key, value]) => ({
-            assignmentTarget: construct.bind(key),
-            expr: value,
-            assignmentTargetPos: DUMMY_POS
-          })),
-        nextExpr: nodes.noop(),
-        newScope: false,
-        export: true,
-      }),
-      newScope: false,
-      export: false,
+    return nodes.createApi({
+      dependencies: [],
+      content: nodes.moduleRoot(DUMMY_POS, {
+        content: nodes.declaration(DUMMY_POS, {
+          declarations: Object.entries(private_)
+            .map(([key, value]) => ({
+              assignmentTarget: construct.bind(key),
+              expr: value,
+              assignmentTargetPos: DUMMY_POS
+            })),
+          nextExpr: nodes.declaration(DUMMY_POS, {
+            declarations: Object.entries(public_)
+              .map(([key, value]) => ({
+                assignmentTarget: construct.bind(key),
+                expr: value,
+                assignmentTargetPos: DUMMY_POS
+              })),
+            nextExpr: nodes.noop(),
+            newScope: false,
+            export: true,
+          }),
+          newScope: false,
+          export: false,
+        })
+      })
     })
-  })
 }

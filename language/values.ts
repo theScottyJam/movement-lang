@@ -1,8 +1,8 @@
 import * as Value from './Value'
 import * as types from './types'
 import type { RuntimeScope } from './Runtime'
-import type { AnyAssignmentTargetNode } from '../nodes/variants/AssignmentTargetNode' // TODO: This seems bad to import from here
-import type { AnyInstructionNode } from '../nodes/variants/InstructionNode' // TODO: This seems bad to import from here
+import type { AnyAssignmentTargetNode } from '../nodes/variants/AssignmentTargetNode'
+import type { AnyInstructionNode } from '../nodes/variants/InstructionNode'
 
 export type UnitValue = Value.Value<types.UnitType, undefined>
 export const createUnit = (): UnitValue => Value.create({ raw: undefined, type: types.createUnit() })

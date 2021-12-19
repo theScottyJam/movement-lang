@@ -1,6 +1,6 @@
 import path from 'path'
 import type { Token } from 'moo'
-import * as AstRoot from './variants/Root';
+import * as AstApi from './variants/AstApi';
 import * as InstructionNode from './variants/InstructionNode';
 import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
 import * as TypeNode from './variants/TypeNode';
@@ -12,17 +12,18 @@ import {
   assertFunctionInnerDataType,
   assertTagInnerDataType,
 } from './helpers/typeAssertions';
+import { initTypeChecking } from './helpers/typeCheckTools';
 import { RuntimeError, SemanticError, FlowControlReturnError } from '../language/exceptions'
 import * as Position from '../language/Position'
+import * as InwardTypeState from '../language/InwardTypeState'
 import * as Runtime from '../language/Runtime'
 import * as RtRespState from '../language/RtRespState'
 import * as values from '../language/values'
-import * as TypeState from '../language/TypeState'
-import * as RespState from '../language/RespState'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
 import { PURITY, getPurityLevel } from '../language/constants'
-import { zip, zip3 } from '../util'
+import { pipe, zip, zip3 } from '../util'
+import type { RespTypeState } from './helpers/_RespTypeState'
 export * as value from './value'
 export * as assignmentTarget from './assignmentTarget'
 export * as type from './type'
@@ -32,8 +33,6 @@ type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
 type AnyTypeNode = TypeNode.AnyTypeNode
 type Position = Position.Position
 type Runtime = Runtime.Runtime
-type TypeState = TypeState.TypeState
-type RespState = RespState.RespState
 type AnyType = Type.AnyType
 
 type ValueOf<T> = T[keyof T]
@@ -42,93 +41,114 @@ const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Toke
 
 const top = <T>(array: readonly T[]): T => array[array.length - 1]
 
-interface RootOpts { content: AnyInstructionNode, dependencies: readonly string[] }
-export const root = ({ content, dependencies }: RootOpts) => AstRoot.create({
+interface CreateApiOpts { content: AnyInstructionNode, dependencies: readonly string[] }
+export const createApi = ({ content, dependencies }: CreateApiOpts) => AstApi.create({
   dependencies: [...new Set(dependencies)],
   ast: content,
-  exec: ({ behaviors = {}, moduleDefinitions, cachedModules = { mutable: new Map() }, stdLib }) => {
-    const rt = Runtime.create({ behaviors, moduleDefinitions, cachedModules, stdLib })
+  // If this module is being imported, then the functions below won't be used, instead,
+  // the code will just jump to using the "ast" property directly.
+  // FIXME0: Maybe move these to be static functions, and get rid of this createApi thing entirely. I would need to deal with dependencies somehow.
+  exec: ({ behaviors = {}, moduleDefinitions, cachedModules = { mutable: new Map() }, stdLib, typeCheckContexts }) => {
+    const rt = Runtime.create({ behaviors, moduleDefinitions, cachedModules, stdLib, typeCheckContexts })
     const { rtRespState } = InstructionNode.exec(content, rt)
 
     const nameToType = new Map([...rtRespState.exports.entries()].map(([name, value]) => [name, value.type]))
     return values.createRecord(rtRespState.exports, types.createRecord({ nameToType }))
   },
-  typeCheck: ({ behaviors = {}, moduleDefinitions, moduleShapes, importStack, stdLibShape, isMainModule = null }) => {
-    const state = TypeState.create({ behaviors, moduleDefinitions, isMainModule: isMainModule ?? importStack.length === 1, moduleShapes, importStack, stdLibShape })
-    const { respState } = InstructionNode.typeCheck(content, state)
-    return respState.moduleShape
+  typeCheck: ({ behaviors = {}, moduleDefinitions, importStack, stdLibShape, isMainModule = true }) => {
+    const typeStateOpts = {
+      behaviors,
+      moduleDefinitions,
+      isMainModule,
+      importStack,
+      stdLibShape,
+    }
+    const { typeCheckContexts, result: type } = initTypeChecking(typeStateOpts, (actions, inwardState) => {
+      return actions.checkType(InstructionNode, content, inwardState).type as types.RecordType
+    })
+    return { typeCheckContexts, type }
   }
+})
+
+interface ModuleRootPayload { content: AnyInstructionNode }
+export const moduleRoot = (pos: Position, payload: ModuleRootPayload) =>
+  InstructionNode.create<ModuleRootPayload>('moduleRoot', pos, payload)
+
+InstructionNode.register<ModuleRootPayload, {}>('moduleRoot', {
+  exec: (rt, { content }) => InstructionNode.exec(content, rt),
+  typeCheck: (actions, inwardState_) => ({ content }) => {
+    const inwardState = InwardTypeState.update(inwardState_, { minPurity: PURITY.pure })
+    const { respState } = actions.checkType(InstructionNode, content, inwardState)
+    return { type: respState.moduleShape }
+  },
 })
 
 interface BeginBlockPayload { content: AnyInstructionNode }
 export const beginBlock = (pos: Position, content: AnyInstructionNode) =>
-  InstructionNode.create<BeginBlockPayload, {}>('beginBlock', pos, { content })
+  InstructionNode.create<BeginBlockPayload>('beginBlock', pos, { content })
 
 InstructionNode.register<BeginBlockPayload, {}>('beginBlock', {
   exec: (rt, { content }) => InstructionNode.exec(content, rt),
-  typeCheck: (state, { pos, content }) => {
-    if (!state.isMainModule) throw new SemanticError('Can not use a begin block in an imported module', pos)
-    return InstructionNode.typeCheck(content, TypeState.update(state, {
-      minPurity: PURITY.none,
-      isBeginBlock: true,
-    }))
+  typeCheck: (actions, inwardState) => ({ pos, content }) => {
+    if (!inwardState.isMainModule) throw new SemanticError('Can not use a begin block in an imported module', pos)
+    return pipe(
+      InwardTypeState.update(inwardState, { minPurity: PURITY.none }),
+      $=> actions.checkType(InstructionNode, content, $),
+      $=> ({ type: $.type }),
+    )
   },
 })
 
 interface BlockPayload { content: AnyInstructionNode }
 export const block = (pos: Position, payload: BlockPayload) =>
-  InstructionNode.create<BlockPayload, {}>('block', pos, payload)
+  InstructionNode.create<BlockPayload>('block', pos, payload)
 
 InstructionNode.register<BlockPayload, {}>('block', {
   exec: (rt, { content }) => {
     const { rtRespState } = InstructionNode.exec(content, rt)
     return { rtRespState, value: values.createUnit() }
   },
-  typeCheck: (outerState, { content }) => {
-    let state = TypeState.update(outerState, {
-      scopes: [...outerState.scopes, { forFn: top(outerState.scopes).forFn, typeLookup: new Map() }],
-      definedTypes: [...outerState.definedTypes, new Map()],
+  typeCheck: (actions, inwardState) => ({ content }) => {
+    return actions.follow.withScope({ forFn: actions.follow.getCurrentFnSymbol() }, () => {
+      const contentType = actions.checkType(InstructionNode, content, inwardState).type
+      const type = types.isEffectivelyNever(contentType) ? types.createNever() : types.createUnit()
+      return { type }
     })
-    const { respState, type: contentType } = InstructionNode.typeCheck(content, state)
-    const type = types.isEffectivelyNever(contentType) ? types.createNever() : types.createUnit()
-    return { respState, type }
   },
 })
 
-// FIXME: createWithNoPos is a placeholder name. I need to figure out how this is actually different from other pos nodes to get a better name (and make sure it really doesn't need a pos)
+// FIXME0: createWithNoPos is a placeholder name. I need to figure out how this is actually different from other pos nodes to get a better name (and make sure it really doesn't need a pos)
 interface SequencePayload { statements: readonly AnyInstructionNode[] }
 export const sequence = (statements: readonly AnyInstructionNode[]) =>
-  InstructionNode.createWithNoPos<SequencePayload, {}>('sequence', { statements })
+  InstructionNode.createWithNoPos<SequencePayload>('sequence', { statements })
 
 InstructionNode.register<SequencePayload, {}>('sequence', {
   exec: (rt, { statements }) => {
     const rtRespStates = statements.map(statement => InstructionNode.exec(statement, rt).rtRespState)
     return { rtRespState: RtRespState.merge(...rtRespStates), value: values.createUnit() }
   },
-  typeCheck: (state, { statements }) => {
-    const typeChecks = statements.map(statement => InstructionNode.typeCheck(statement, state))
-    const respStates = typeChecks.map(x => x.respState)
-    const type = typeChecks.find(x => types.isEffectivelyNever(x.type)) ? types.createNever() : types.createUnit()
-    return { respState: RespState.merge(...respStates), type }
+  typeCheck: (actions, inwardState) => ({ statements }) => {
+    const typeChecks = statements.map(statement => actions.checkType(InstructionNode, statement, inwardState))
+    return {
+      type: typeChecks.find(x => types.isEffectivelyNever(x.type))
+        ? types.createNever()
+        : types.createUnit()
+    }
   },
 })
 
 interface NoopPayload {}
 export const noop = () =>
-  InstructionNode.createWithNoPos<NoopPayload, {}>('noop', {})
+  InstructionNode.createWithNoPos<NoopPayload>('noop', {})
 
 InstructionNode.register<NoopPayload, {}>('noop', {
   exec: rt => ({ rtRespState: RtRespState.create(), value: values.createUnit() }),
-  typeCheck: state => {
-    const respState = RespState.create()
-    const type = types.createUnit()
-    return { respState, type }
-  },
+  typeCheck: (actions, inwardState) => () => ({ type: types.createUnit() }),
 })
 
 interface PrintPayload { r: AnyInstructionNode }
 export const print = (pos: Position, payload: PrintPayload) =>
-  InstructionNode.create<PrintPayload, {}>('print', pos, payload)
+  InstructionNode.create<PrintPayload>('print', pos, payload)
 
 InstructionNode.register<PrintPayload, {}>('print', {
   exec: (rt, { r }) => {
@@ -136,25 +156,40 @@ InstructionNode.register<PrintPayload, {}>('print', {
     rt.behaviors.showDebugOutput(value)
     return { rtRespState, value }
   },
-  typeCheck: (state, { r }) => InstructionNode.typeCheck(r, state),
+  typeCheck: (actions, inwardState) => ({ r }) => ({ type: actions.checkType(InstructionNode, r, inwardState).type }),
 })
 
 interface PrintTypePayload { r: AnyInstructionNode }
 export const printType = (pos: Position, payload: PrintTypePayload) =>
-  InstructionNode.create<PrintTypePayload, {}>('printType', pos, payload)
+  InstructionNode.create<PrintTypePayload>('printType', pos, payload)
 
 InstructionNode.register<PrintTypePayload, {}>('printType', {
   exec: (rt, { r }) => InstructionNode.exec(r, rt),
-  typeCheck: (state, { r }) => {
-    const { respState, type } = InstructionNode.typeCheck(r, state)
-    state.behaviors.showDebugTypeOutput(type)
-    return { respState, type }
+  typeCheck: (actions, inwardState) => ({ r }) => {
+    const type = actions.checkType(InstructionNode, r, inwardState).type
+    inwardState.constants.behaviors.showDebugTypeOutput(type)
+    return { type }
+  },
+})
+
+interface ShowDebugOutputPayload { r: AnyInstructionNode }
+export const showDebugOutput = (pos: Position, payload: ShowDebugOutputPayload) =>
+  InstructionNode.create<ShowDebugOutputPayload>('showDebugOutput', pos, payload)
+
+InstructionNode.register<ShowDebugOutputPayload, {}>('showDebugOutput', {
+  exec: (rt, { r }) => {
+    ;(globalThis?.debugExec as any)(rt)
+    return InstructionNode.exec(r, rt)
+  },
+  typeCheck: (actions, inwardState) => ({ r }) => {
+    ;(globalThis?.debugType as any)()
+    return { type: actions.checkType(InstructionNode, r, inwardState).type }
   },
 })
 
 interface EqualsPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const equals = (pos: Position, payload: EqualsPayload) =>
-  InstructionNode.create<EqualsPayload, {}>('equals', pos, payload)
+  InstructionNode.create<EqualsPayload>('equals', pos, payload)
 
 InstructionNode.register<EqualsPayload, {}>('equals', {
   exec: (rt, { l, r }) => {
@@ -165,18 +200,18 @@ InstructionNode.register<EqualsPayload, {}>('equals', {
       value: values.createBoolean(lRes.value.raw === rRes.value.raw),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createBoolean() }
+    return { type: types.createBoolean() }
   },
 })
 
 interface NotEqualPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const notEqual = (pos: Position, payload: NotEqualPayload) =>
-  InstructionNode.create<NotEqualPayload, {}>('notEqual', pos, payload)
+  InstructionNode.create<NotEqualPayload>('notEqual', pos, payload)
 
 InstructionNode.register<NotEqualPayload, {}>('notEqual', {
   exec: (rt, { l, r }) => {
@@ -187,18 +222,18 @@ InstructionNode.register<NotEqualPayload, {}>('notEqual', {
       value: values.createBoolean(lRes.value.raw !== rRes.value.raw),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createBoolean() }
+    return { type: types.createBoolean() }
   },
 })
 
 interface AddPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const add = (pos: Position, payload: AddPayload) =>
-  InstructionNode.create<AddPayload, {}>('add', pos, payload)
+  InstructionNode.create<AddPayload>('add', pos, payload)
 
 InstructionNode.register<AddPayload, {}>('add', {
   exec: (rt, { l, r }) => {
@@ -211,18 +246,18 @@ InstructionNode.register<AddPayload, {}>('add', {
       ),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createInt() }
+    return { type: types.createInt() }
   },
 })
 
 interface SubtractPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const subtract = (pos: Position, payload: SubtractPayload) =>
-  InstructionNode.create<SubtractPayload, {}>('subtract', pos, payload)
+  InstructionNode.create<SubtractPayload>('subtract', pos, payload)
 
 InstructionNode.register<SubtractPayload, {}>('subtract', {
   exec: (rt, { l, r }) => {
@@ -235,18 +270,18 @@ InstructionNode.register<SubtractPayload, {}>('subtract', {
       ),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createInt() }
+    return { type: types.createInt() }
   },
 })
 
 interface MultiplyPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const multiply = (pos: Position, payload: MultiplyPayload) =>
-  InstructionNode.create<MultiplyPayload, {}>('multiply', pos, payload)
+  InstructionNode.create<MultiplyPayload>('multiply', pos, payload)
 
 InstructionNode.register<MultiplyPayload, {}>('multiply', {
   exec: (rt, { l, r }) => {
@@ -259,18 +294,18 @@ InstructionNode.register<MultiplyPayload, {}>('multiply', {
       ),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createInt() }
+    return { type: types.createInt() }
   },
 })
 
 interface PowerPayload { l: AnyInstructionNode, r: AnyInstructionNode }
 export const power = (pos: Position, payload: PowerPayload) =>
-  InstructionNode.create<PowerPayload, {}>('power', pos, payload)
+  InstructionNode.create<PowerPayload>('power', pos, payload)
 
 InstructionNode.register<PowerPayload, {}>('power', {
   exec: (rt, { l, r }) => {
@@ -283,18 +318,18 @@ InstructionNode.register<PowerPayload, {}>('power', {
       ),
     }
   },
-  typeCheck: (state, { l, r }) => {
-    const { respState: lRespState, type: lType } = InstructionNode.typeCheck(l, state)
-    const { respState: rRespState, type: rType } = InstructionNode.typeCheck(r, state)
+  typeCheck: (actions, inwardState) => ({ l, r }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    const rType = actions.checkType(InstructionNode, r, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createInt(), l.pos)
     Type.assertTypeAssignableTo(rType, types.createInt(), r.pos)
-    return { respState: RespState.merge(lRespState, rRespState), type: types.createInt() }
+    return { type: types.createInt() }
   },
 })
 
 interface PropertyAccessPayload { l: AnyInstructionNode, identifier: string }
 export const propertyAccess = (pos: Position, payload: PropertyAccessPayload) =>
-  InstructionNode.create<PropertyAccessPayload, {}>('propertyAccess', pos, payload)
+  InstructionNode.create<PropertyAccessPayload>('propertyAccess', pos, payload)
 
 InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
   exec: (rt, { l, identifier }) => {
@@ -303,19 +338,19 @@ InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
     if (!nameToValue.has(identifier)) throw new Error(`Internal Error: Expected to find the identifier "${identifier}" on a record, and that identifier did not exist`)
     return { rtRespState: lRes.rtRespState, value: nameToValue.get(identifier) }
   },
-  typeCheck: (state, { pos, l, identifier }) => {
-    const { respState, type: lType } = InstructionNode.typeCheck(l, state)
+  typeCheck: (actions, inwardState) => ({ pos, l, identifier }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
     const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).nameToType.get(identifier)
     if (!result) throw new SemanticError(`Failed to find the identifier "${identifier}" on the record of type ${Type.repr(lType)}.`, pos)
-    return { respState, type: result }
+    return { type: result }
   },
 })
 
-interface TypeAssertionPayload { expr: AnyInstructionNode, typeNode: AnyTypeNode, typePos: Position, operatorAndTypePos: Position }
+interface TypeAssertionPayload { expr: AnyInstructionNode, typeNode: AnyTypeNode, operatorAndTypePos: Position }
 interface TypeAssertionTypePayload { finalType: AnyType }
 export const typeAssertion = (pos: Position, payload: TypeAssertionPayload) =>
-  InstructionNode.create<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', pos, payload)
+  InstructionNode.create<TypeAssertionPayload>('typeAssertion', pos, payload)
 
 InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAssertion', {
   exec: (rt, { expr, finalType }) => {
@@ -325,24 +360,24 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
     }
     return { rtRespState, value }
   },
-  typeCheck: (state, { expr, typeNode, typePos, operatorAndTypePos }) => {
-    const { respState: respState1, type } = InstructionNode.typeCheck(expr, state)
-    const { respState: respState2, type: finalType } = TypeNode.typeCheck(typeNode, state)
-    if (!Type.isTypeAssignableTo(finalType, type) && !Type.isTypeAssignableTo(type, finalType)) {
-      throw new SemanticError(`Attempted to change a type from "${Type.repr(type)}" to type "${Type.repr(finalType)}". "as" type assertions can only widen or narrow a provided type.`, operatorAndTypePos)
+  typeCheck: (actions, inwardState) => ({ expr, typeNode, operatorAndTypePos }) => {
+    const exprType = actions.checkType(InstructionNode, expr, inwardState).type
+    const expectedType = actions.checkType(TypeNode, typeNode, inwardState).type
+    if (!Type.isTypeAssignableTo(expectedType, exprType) && !Type.isTypeAssignableTo(exprType, expectedType)) {
+      throw new SemanticError(`Attempted to change a type from "${Type.repr(exprType)}" to type "${Type.repr(expectedType)}". "as" type assertions can only widen or narrow a provided type.`, operatorAndTypePos)
     }
     return {
-      respState: RespState.merge(respState1, respState2),
-      type: finalType, typePayload: { finalType },
+      type: expectedType,
+      typePayload: { finalType: expectedType },
     }
   },
 })
 
 interface GenericParam { typeNode: AnyTypeNode, pos: Position }
 interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
-// FIXME: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
+// FIXME0: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
 export const invoke = (pos: Position, payload: InvokePayload) =>
-  InstructionNode.create<InvokePayload, {}>('invoke', pos, { ...payload, callWithPurity: PURITY.pure })
+  InstructionNode.create<InvokePayload>('invoke', pos, { ...payload, callWithPurity: PURITY.pure })
 
 InstructionNode.register<InvokePayload, {}>('invoke', {
   exec: (outerRt, { fnExpr, args }) => {
@@ -366,8 +401,8 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       value: bodyRes.value,
     }
   },
-  typeCheck: (state, { pos, fnExpr, genericParams, args, callWithPurity }) => {
-    const { respState: fnRespState, type: fnType } = InstructionNode.typeCheck(fnExpr, state)
+  typeCheck: (actions, inwardState) => ({ pos, fnExpr, genericParams, args, callWithPurity }) => {
+    const fnType = actions.checkType(InstructionNode, fnExpr, inwardState).type
     // Type check function expression
     if (Type.isTypeParameter(fnType) || !types.isFunction(fnType)) {
       throw new SemanticError(`Found type "${Type.repr(fnType)}", but expected a function.`, fnExpr.pos)
@@ -380,18 +415,14 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
     }
     // Figure out the values of the generic params, and make sure they hold against the constraints
     let valuesOfGenericParams = new Map()
-    const respStates = [fnRespState]
     for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes.slice(0, genericParams.length))) {
-      const { respState, type } = TypeNode.typeCheck(assignerGenericParam.typeNode, state)
-      respStates.push(respState)
-      Type.assertTypeAssignableTo(type, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
-      valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, type)
+      const assignerGenericParamType = actions.checkType(TypeNode, assignerGenericParam.typeNode, inwardState).type
+      Type.assertTypeAssignableTo(assignerGenericParamType, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
+      valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, assignerGenericParamType)
     }
 
     // Type check args
-    const argsTypeChecked = args.map(p => InstructionNode.typeCheck(p, state))
-    const argTypes = argsTypeChecked.map(p => p.type)
-    respStates.push(...argsTypeChecked.map(p => p.respState))
+    const argTypes = args.map(p => actions.checkType(InstructionNode, p, inwardState).type)
     if (fnTypeData.paramTypes.length !== argTypes.length) {
       throw new SemanticError(`Found ${argTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
@@ -413,7 +444,7 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       })
     }
     // Check purity level
-    if (getPurityLevel(fnTypeData.purity) < getPurityLevel(state.minPurity)) {
+    if (getPurityLevel(fnTypeData.purity) < getPurityLevel(inwardState.minPurity)) {
       throw new SemanticError(`Attempted to call a function which was less pure than its containing environment.`, fnExpr.pos)
     }
 
@@ -431,45 +462,47 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
         return concreteType
       }
     })
-    return { respState: RespState.merge(...respStates), type: returnType }
+    return { type: returnType }
   },
 })
 
 interface CallWithPermissionsPayload { purity: ValueOf<typeof PURITY>, invokeExpr: AnyInstructionNode }
 export const callWithPermissions = (pos: Position, payload: CallWithPermissionsPayload) =>
-  InstructionNode.create<CallWithPermissionsPayload, {}>('callWithPermissions', pos, payload)
+  InstructionNode.create<CallWithPermissionsPayload>('callWithPermissions', pos, payload)
 
 InstructionNode.register<CallWithPermissionsPayload, {}>('callWithPermissions', {
   exec: (rt, { invokeExpr }) => InstructionNode.exec(invokeExpr, rt),
-  typeCheck: (state, { purity, invokeExpr }) => {
-    if (invokeExpr.name !== 'invoke') { // FIXME: I'm reaching through to make this assertion
+  typeCheck: (actions, inwardState) => ({ purity, invokeExpr }) => {
+    if (invokeExpr.name !== 'invoke') { // FIXME0: I'm reaching through to make this assertion. Perhaps this assertion should be made before the typeChecking phase starts.
       throw new Error(`Internal Error: This expression received a purity annotation, but such annotations should only be used on function calls.`)
     }
-    (invokeExpr.payload as any).callWithPurity = purity // FIXME: I should not be modifying this
-    return InstructionNode.typeCheck(invokeExpr, state)
-  }
+    (invokeExpr.payload as any).callWithPurity = purity // FIXME0: I should not be modifying this
+    return { type: actions.checkType(InstructionNode, invokeExpr, inwardState).type }
+  },
 })
 
 interface ReturnPayload { value: AnyInstructionNode }
 export const return_ = (pos: Position, payload: ReturnPayload) =>
-  InstructionNode.create<ReturnPayload, {}>('return', pos, payload)
+  InstructionNode.create<ReturnPayload>('return', pos, payload)
 
 InstructionNode.register<ReturnPayload, {}>('return', {
   exec: (rt, { value }) => {
     const returnValue = InstructionNode.exec(value, rt)
     throw new FlowControlReturnError({ returnValue: returnValue.value })
   },
-  typeCheck: (state, { pos, value }) => {
-    if (state.isBeginBlock) throw new SemanticError('Can not use a return outside of a function.', pos)
-    const { respState, type } = InstructionNode.typeCheck(value, state)
-    const newRespState = RespState.update(respState, { returnTypes: [...respState.returnTypes, { type, pos }] })
-    return { respState: newRespState, type: types.createNever() }
+  typeCheck: (actions, inwardState) => ({ pos, value }) => {
+    if (!actions.follow.isInFn()) throw new SemanticError('Can not use a return outside of a function.', pos)
+    const type = actions.checkType(InstructionNode, value, inwardState).type
+    return {
+      outward: { returnTypes: [{ type, pos }] },
+      type: types.createNever()
+    }
   },
 })
 
 interface BranchPayload { condition: AnyInstructionNode, ifSo: AnyInstructionNode, ifNot: AnyInstructionNode }
 export const branch = (pos: Position, payload: BranchPayload) =>
-  InstructionNode.create<BranchPayload, {}>('branch', pos, payload)
+  InstructionNode.create<BranchPayload>('branch', pos, payload)
 
 InstructionNode.register<BranchPayload, {}>('branch', {
   exec: (rt, { condition, ifSo, ifNot }) => {
@@ -480,20 +513,20 @@ InstructionNode.register<BranchPayload, {}>('branch', {
       value: finalValueRes.value,
     }
   },
-  typeCheck: (state, { condition, ifSo, ifNot }) => {
-    const { respState: condRespState, type: condType } = InstructionNode.typeCheck(condition, state)
+  typeCheck: (actions, inwardState) => ({ condition, ifSo, ifNot }) => {
+    const condType = actions.checkType(InstructionNode, condition, inwardState).type
     Type.assertTypeAssignableTo(condType, types.createBoolean(), condition.pos)
-    const { respState: ifSoRespState, type: ifSoType } = InstructionNode.typeCheck(ifSo, state)
-    const { respState: ifNotRespState, type: ifNotType } = InstructionNode.typeCheck(ifNot, state)
-
+    const ifSoType = actions.checkType(InstructionNode, ifSo, inwardState).type
+    const ifNotType = actions.checkType(InstructionNode, ifNot, inwardState).type
+    
     const biggerType = Type.getWiderType([ifSoType, ifNotType], `The following "if true" case of this condition has the type "${Type.repr(ifSoType)}", which is incompatible with the "if not" case's type, "${Type.repr(ifNotType)}".`, ifSo.pos)
-    return { respState: RespState.merge(condRespState, ifSoRespState, ifNotRespState), type: biggerType }
+    return { type: biggerType }
   },
 })
 
 interface MatchPayload { matchValue: AnyInstructionNode, matchArms: { pattern: AnyAssignmentTargetNode, body: AnyInstructionNode }[] }
 export const match = (pos: Position, payload: MatchPayload) =>
-  InstructionNode.create<MatchPayload, {}>('match', pos, payload)
+  InstructionNode.create<MatchPayload>('match', pos, payload)
 
 InstructionNode.register<MatchPayload, {}>('match', {
   exec: (rt, { matchValue, matchArms }) => {
@@ -511,22 +544,21 @@ InstructionNode.register<MatchPayload, {}>('match', {
     }
     throw new RuntimeError('No patterns matched.')
   },
-  typeCheck: (state, { matchValue, matchArms }) => {
-    const { respState, type } = InstructionNode.typeCheck(matchValue, state)
-    const respStates = [respState]
+  typeCheck: (actions, inwardState) => ({ matchValue, matchArms }) => {
+    const matchValueType = actions.checkType(InstructionNode, matchValue, inwardState).type
     let overallType: AnyType | null = null
     for (const { pattern, body } of matchArms) {
-      const { respState: respState2 } = AssignmentTargetNode.typeCheck(pattern, state, { incomingType: type, allowWidening: true, export: false })
-      respStates.push(RespState.update(respState2, { declarations: [] }))
-      const bodyState = TypeState.applyDeclarations(state, respState2)
-      const bodyType = InstructionNode.typeCheck(body, bodyState).type
+      const bodyType = actions.follow.withScope({ forFn: actions.follow.getCurrentFnSymbol() }, () => {
+        actions.checkType(AssignmentTargetNode, pattern, inwardState, { incomingType: matchValueType, allowWidening: true, export: false })
+        return actions.checkType(InstructionNode, body, inwardState).type
+      })
       if (!overallType) {
         overallType = bodyType
         continue
       }
       overallType = Type.getWiderType([overallType, bodyType], `The following match arm's result has the type "${Type.repr(bodyType)}", which is incompatible with the type of previous match arms, "${Type.repr(overallType)}".`, DUMMY_POS)
     }
-    return { respState: RespState.merge(...respStates), type: overallType }
+    return { type: overallType }
   },
 })
 
@@ -534,7 +566,7 @@ interface ImportOpts { from: string }
 interface ImportPayload { rawFrom: string }
 interface ImportTypePayload { absoluteFrom: string }
 export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) =>
-  InstructionNode.create<ImportPayload, ImportTypePayload>('import', pos, { rawFrom })
+  InstructionNode.create<ImportPayload>('import', pos, { rawFrom })
 
 InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
   exec: (rt, { absoluteFrom: from_ }) => {
@@ -550,56 +582,59 @@ InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
       moduleDefinitions: rt.moduleDefinitions,
       cachedModules: rt.cachedModules,
       stdLib: rt.stdLib,
+      typeCheckContexts: rt.typeCheckContexts,
     })
     rt.cachedModules.mutable.set(from_, module)
 
     return { rtRespState: RtRespState.create(), value: module }
   },
-  typeCheck: (state, { pos, rawFrom }) => {
+  typeCheck: (actions, inwardState) => ({ pos, rawFrom }) => {
     // §dIPUB - search for a similar implementation that's used elsewhere
-    const calcAbsoluteNormalizedPath = (rawPath: string, state: TypeState) => (
-      path.normalize(path.join(path.dirname(top(state.importStack)), rawPath))
+    const calcAbsoluteNormalizedPath = (rawPath: string, { relativeToFile }: { relativeToFile: string }) => (
+      path.normalize(path.join(path.dirname(relativeToFile), rawPath))
     )
 
-    const from_ = calcAbsoluteNormalizedPath(rawFrom, state)
+    const from_ = calcAbsoluteNormalizedPath(rawFrom, { relativeToFile: top(inwardState.importStack) })
     const typePayload = { absoluteFrom: from_ }
-    if (state.importStack.includes(from_)) {
+    if (inwardState.importStack.includes(from_)) {
       throw new SemanticError('Circular dependency detected', pos)
     }
-    if (state.moduleShapes.mutable.has(from_)) {
-      return { respState: RespState.create(), type: state.moduleShapes.mutable.get(from_), typePayload }
+    if (actions.follow.getModuleShapes().has(from_)) {
+      return { type: actions.follow.getModuleShapes().get(from_), typePayload }
     }
 
-    const module = state.moduleDefinitions.get(from_)
+    const module = inwardState.constants.moduleDefinitions.get(from_)
     if (!module) throw new Error()
-    const type = module.typeCheck({
-      behaviors: state.behaviors,
-      moduleDefinitions: state.moduleDefinitions,
-      moduleShapes: state.moduleShapes,
-      importStack: [...state.importStack, from_],
-      stdLibShape: state.stdLibShape,
-    })
-    state.moduleShapes.mutable.set(from_, type)
 
-    return { respState: RespState.create(), type, typePayload }
+    const type = actions.withNewModule({ inwardState, path: from_ }, newInwardState => {
+      const type = actions.checkType(InstructionNode, module.ast, newInwardState).type
+      return type as types.RecordType
+    })
+
+    actions.follow.setModuleShapeEntry(from_, type)
+
+    return {
+      type,
+      typePayload,
+    }
   },
 })
 
 // Used to provide information about an import statement nested within.
-// FIXME: Is there a better way to handle this? Probably not.
+// FIXME0: Is there a better way to handle this? Probably not.
 interface ImportMetaOpts { from: string, childNode: AnyInstructionNode }
 interface ImportMetaPayload { dependency: string, childNode: AnyInstructionNode }
 export const importMeta = (pos: Position, { from: dependency, childNode }: ImportMetaOpts) =>
-  InstructionNode.create<ImportMetaPayload, {}>('importMeta', pos, { dependency, childNode })
+  InstructionNode.create<ImportMetaPayload>('importMeta', pos, { dependency, childNode })
 
 InstructionNode.register<ImportMetaPayload, {}>('importMeta', {
   exec: (rt, { childNode }) => InstructionNode.exec(childNode, rt),
-  typeCheck: (state, { childNode }) => InstructionNode.typeCheck(childNode, state),
+  typeCheck: (actions, inwardState) => ({ childNode }) => ({ type: actions.checkType(InstructionNode, childNode, inwardState).type }),
 })
 
 interface VarLookupPayload { identifier: string }
 export const varLookup = (pos: Position, { identifier }: VarLookupPayload) =>
-  InstructionNode.create<VarLookupPayload, {}>('varLookup', pos, { identifier })
+  InstructionNode.create<VarLookupPayload>('varLookup', pos, { identifier })
 
 InstructionNode.register<VarLookupPayload, {}>('varLookup', {
   exec: (rt, { identifier }) => {
@@ -607,42 +642,43 @@ InstructionNode.register<VarLookupPayload, {}>('varLookup', {
     if (!foundVar) throw new Error(`INTERNAL ERROR: Identifier "${identifier}" not found`)
     return { rtRespState: RtRespState.create(), value: foundVar }
   },
-  typeCheck: (state, { pos, identifier }) => {
-    const result = TypeState.lookupVar(state, identifier)
+  typeCheck: (actions, inwardState) => ({ pos, identifier }) => {
+    const result = actions.follow.lookupVar(identifier)
     if (!result) throw new SemanticError(`Attempted to access undefined variable ${identifier}`, pos)
     const { type, fromOuterFn } = result
-    const respState = RespState.create({ outerFnVars: fromOuterFn ? [identifier] : [] })
-    return { respState, type }
+    return {
+      outward: { outerFnVars: fromOuterFn ? [identifier] : [] },
+      type,
+    }
   },
 })
 
 export const stdLibRef = (pos: Position) =>
-  InstructionNode.create<{}, {}>('stdLib', pos, {})
+  InstructionNode.create<{}>('stdLib', pos, {})
 
 InstructionNode.register<{}, {}>('stdLib', {
   exec: rt => ({ rtRespState: RtRespState.create(), value: rt.stdLib }),
-  typeCheck: state => ({ respState: RespState.create(), type: state.stdLibShape }),
+  typeCheck: (actions, inwardState) => () => ({ type: inwardState.constants.stdLibShape }),
 })
 
 interface TypeAliasPayload { name: string, typeNode: AnyTypeNode, definedWithin: AnyInstructionNode }
 export const typeAlias = (pos: Position, payload: TypeAliasPayload) =>
-  InstructionNode.create<TypeAliasPayload, {}>('typeAlias', pos, payload)
+  InstructionNode.create<TypeAliasPayload>('typeAlias', pos, payload)
 
 InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
   exec: (rt, { definedWithin }) => InstructionNode.exec(definedWithin, rt),
-  typeCheck: (state, { pos, name, typeNode, definedWithin }) => {
-    const { respState: respState1, type } = TypeNode.typeCheck(typeNode, state)
-    const { respState: respState2, type: finalType } = InstructionNode.typeCheck(definedWithin, TypeState.addToTypeScope(state, name, () => type, pos))
+  typeCheck: (actions, inwardState) => ({ pos, name, typeNode, definedWithin }) => {
+    const type = actions.checkType(TypeNode, typeNode, inwardState).type
+    actions.follow.addToScopeInTypeNamespace(name, () => type, pos)
     return {
-      respState: RespState.merge(respState1, respState2),
-      type: finalType,
+      type: actions.checkType(InstructionNode, definedWithin, inwardState).type
     }
   },
 })
 
 interface ApplyTagPayload { tag: AnyInstructionNode, content: AnyInstructionNode }
 export const applyTag = (pos: Position, payload: ApplyTagPayload) =>
-  InstructionNode.create<ApplyTagPayload, {}>('applyTag', pos, payload)
+  InstructionNode.create<ApplyTagPayload>('applyTag', pos, payload)
 
 InstructionNode.register<ApplyTagPayload, {}>('applyTag', {
   exec: (rt, { tag, content }) => {
@@ -656,15 +692,13 @@ InstructionNode.register<ApplyTagPayload, {}>('applyTag', {
       value: values.createTagged(contentValue, finalType),
     }
   },
-  typeCheck: (state, { pos, tag, content }) => {
-    const { respState: respState1, type: tagType } = InstructionNode.typeCheck(tag, state)
-    const { respState: respState2, type: contentType } = InstructionNode.typeCheck(content, state)
+  typeCheck: (actions, inwardState) => ({ pos, tag, content }) => {
+    const tagType = actions.checkType(InstructionNode, tag, inwardState).type
+    const contentType = actions.checkType(InstructionNode, content, inwardState).type
 
     Type.assertTypeAssignableTo(contentType, assertTagInnerDataType(Type.assertIsConcreteType(tagType).data).boxedType, pos)
-    const type = types.createTagged({ tag: tagType as types.TagType })
     return {
-      respState: RespState.merge(respState1, respState2),
-      type,
+      type: types.createTagged({ tag: tagType as types.TagType })
     }
   },
 })
@@ -672,7 +706,7 @@ InstructionNode.register<ApplyTagPayload, {}>('applyTag', {
 interface IndividualDeclaration { expr: AnyInstructionNode, assignmentTarget: AnyAssignmentTargetNode, assignmentTargetPos: Position }
 interface DeclarationPayload { export?: boolean, declarations: IndividualDeclaration[], nextExpr: AnyInstructionNode, newScope: boolean }
 export const declaration = (pos: Position, { export: export_ = false, declarations, nextExpr, newScope = false }: DeclarationPayload) =>
-  InstructionNode.create<DeclarationPayload, {}>('declaration', pos, { export: export_, declarations, nextExpr, newScope })
+  InstructionNode.create<DeclarationPayload>('declaration', pos, { export: export_, declarations, nextExpr, newScope })
 
 InstructionNode.register<DeclarationPayload, {}>('declaration', {
   exec: (rt, { export: export_, declarations, nextExpr }) => {
@@ -695,24 +729,21 @@ InstructionNode.register<DeclarationPayload, {}>('declaration', {
       value: nextExprRes.value,
     }
   },
-  typeCheck: (outerState, { pos, export: export_, declarations, nextExpr, newScope }) => {
-    if (outerState.isMainModule && export_) throw new SemanticError('Can not export from a main module', pos)
-    let state = newScope
-      ? TypeState.update(outerState, {
-        scopes: [...outerState.scopes, { forFn: top(outerState.scopes).forFn, typeLookup: new Map() }],
-        definedTypes: [...outerState.definedTypes, new Map()],
-      })
-      : outerState
-
-    const respStates = []
-    for (const decl of declarations) {
-      const { respState, type } = InstructionNode.typeCheck(decl.expr, state)
-      respStates.push(respState)
-      const { respState: respState2 } = AssignmentTargetNode.typeCheck(decl.assignmentTarget, state, { incomingType: type, export: export_ })
-      respStates.push(RespState.update(respState2, { declarations: [] }))
-      state = TypeState.applyDeclarations(state, respState2)
+  typeCheck: (actions, inwardState) => ({ pos, export: export_, declarations, nextExpr, newScope }) => {
+    if (inwardState.isMainModule && export_) throw new SemanticError('Can not export from a main module', pos)
+    
+    const logicMaybeWithinScope = () => {
+      for (const decl of declarations) {
+        const declExprType = actions.checkType(InstructionNode, decl.expr, inwardState).type
+        actions.checkType(AssignmentTargetNode, decl.assignmentTarget, inwardState, { incomingType: declExprType, export: export_ })
+      }
+      return actions.checkType(InstructionNode, nextExpr, inwardState).type
     }
-    const next = InstructionNode.typeCheck(nextExpr, state)
-    return { respState: RespState.merge(...respStates, next.respState), type: next.type }
+
+    return {
+      type: newScope
+        ? actions.follow.withScope({ forFn: actions.follow.getCurrentFnSymbol() }, logicMaybeWithinScope)
+        : logicMaybeWithinScope()
+    }
   },
 })
