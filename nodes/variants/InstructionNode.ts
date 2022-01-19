@@ -8,7 +8,7 @@ import type * as RtRespState from '../../language/RtRespState'
 export interface InstructionNode<T> extends AnyNode.Node<T> {
   readonly sentinel: symbol,
   readonly name: string
-  readonly pos?: Position.Position
+  readonly pos: Position.Position
   readonly nodeType: 'instruction'
   readonly payload: T
 }

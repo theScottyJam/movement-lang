@@ -10,3 +10,12 @@ export interface Node<T> {
 }
 
 export type AnyNode = Node<{}>
+
+export const isNode = (value: unknown): value is AnyNode => (
+  typeof value === 'object' &&
+  value != null &&
+  'sentinel' in value &&
+  'name' in value &&
+  'nodeType' in value &&
+  'payload' in value
+)

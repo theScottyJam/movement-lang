@@ -21,7 +21,7 @@ type Position = Position.Position
 type Runtime = Runtime.Runtime
 type AnyType = Type.AnyType
 
-const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
+const DUMMY_POS = Position.from('<unknown>', { line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
 interface BindPayload {
   readonly identifier: string
@@ -51,7 +51,7 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
 
     if (maybeTypeConstraint && incomingType !== AssignmentTargetNode.noTypeIncoming && !Type.isTypeAssignableTo(incomingType, maybeTypeConstraint)) {
       if (!allowWidening) {
-        throw new SemanticError(`Found type "${Type.repr(incomingType)}", but expected type "${Type.repr(maybeTypeConstraint)}".`, DUMMY_POS)
+        throw new SemanticError(`Can not assign the type "${Type.repr(incomingType)}" to an lvalue with the constraint "${Type.repr(maybeTypeConstraint)}".`, identPos)
       } else if (allowWidening && !Type.isTypeAssignableTo(maybeTypeConstraint, incomingType)) {
         throw new SemanticError(`Attempted to change a type from "${Type.repr(incomingType)}" to type "${Type.repr(maybeTypeConstraint)}". Pattern matching can only widen or narrow a provided type.`, DUMMY_POS)
       }
@@ -93,9 +93,9 @@ AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
     }
     return allBindings
   },
-  typeCheck: (actions, inwardState) => ({ entries }, { incomingType, allowWidening, export: export_ }) => {
+  typeCheck: (actions, inwardState) => ({ pos, entries }, { incomingType, allowWidening, export: export_ }) => {
     if (incomingType !== AssignmentTargetNode.noTypeIncoming) {
-      Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), DUMMY_POS, `Found type ${Type.repr(incomingType)} but expected a record.`)
+      Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), pos, `Attempted to perform a record-destructure on the non-record type ${Type.repr(incomingType)}.`)
     }
 
     const nameToType = new Map()
@@ -134,7 +134,7 @@ AssignmentTargetNode.register<DestructureTaggedPayload, {}>('destructureTagged',
     const tagInnerData = assertTagInnerDataType(Type.assertIsConcreteType(tagType).data)
     const finalType = types.createTagged({ tag: tagType as types.TagType })
     if (incomingType !== AssignmentTargetNode.noTypeIncoming) {
-      Type.assertTypeAssignableTo(incomingType, finalType, DUMMY_POS)
+      Type.assertTypeAssignableTo(incomingType, finalType, pos, `Attempted to perform a tag-destructure with type "${Type.repr(incomingType)}" on an lvalue of an incompatible tag "${Type.repr(finalType)}".`)
     }
     const innerContentType = actions.checkType(AssignmentTargetNode, innerContent, inwardState, {
       incomingType: incomingType === AssignmentTargetNode.noTypeIncoming || types.isEffectivelyNever(incomingType)

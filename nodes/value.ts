@@ -38,7 +38,7 @@ InstructionNode.register<IntPayload, {}>('int', {
   typeCheck: (actions, inwardState) => () => ({ type: types.createInt() }),
 })
 
-const parseEscapeSequences = (rawStr: string, pos: Position) => {
+export const parseEscapeSequences = (rawStr: string, pos: Position) => {
   let value = ''
   let inEscape = false
   for (const c of rawStr) {
@@ -152,6 +152,7 @@ interface FunctionPayload {
   maybeBodyTypeNode: AnyTypeNode | null
   purity: purityTypes
   genericParamDefList: GenericParamDefinition[]
+  posWithoutBody: Position
 }
 interface FunctionTypePayload {
   finalType: types.FunctionType,
@@ -172,7 +173,7 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
       assertNotNullish(finalType),
     )
   }),
-  typeCheck: (actions, inwardState_) => ({ pos, params, body, maybeBodyTypeNode, purity, genericParamDefList }) => {
+  typeCheck: (actions, inwardState_) => ({ params, body, maybeBodyTypeNode, purity, genericParamDefList, posWithoutBody }) => {
     type WrapParams<T> = [
       Parameters<typeof actions.withFunctionDefinition>[0],
       (inwardState: InwardTypeState) => T,
@@ -214,7 +215,7 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
 
       // Getting declared body type
       const requiredBodyType = maybeBodyTypeNode ? actions.checkType(TypeNode, maybeBodyTypeNode, inwardState).type : null
-      if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, pos, `This function can return type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
+      if (requiredBodyType) Type.assertTypeAssignableTo(bodyType, requiredBodyType, posWithoutBody, `This function can return type ${Type.repr(bodyType)} but type ${Type.repr(requiredBodyType)} was expected.`)
 
       // Checking if calculated return types line up with declared body type
       if (requiredBodyType) {
@@ -229,7 +230,7 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
       const returnType = requiredBodyType ?? (
         allReturnTypes.length === 0 // true when all paths lead to #never (and got filtered out)
           ? types.createNever()
-          : Type.getWiderType(allReturnTypes, 'Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation.', pos)
+          : Type.getWiderType(allReturnTypes, 'Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation.', posWithoutBody)
       )
 
       const finalType = types.createFunction({

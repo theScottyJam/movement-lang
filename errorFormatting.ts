@@ -1,10 +1,20 @@
 import { BadSyntaxError, SemanticError } from './language/exceptions'
+import * as Position from './language/Position'
 
-const termColors = {
+type LoadModuleFn = (path: string) => string
+
+const defaultTermColors = {
   bold: '\u001b[1m',
   yellow: '\u001b[33m',
   lightRed: '\x1B[1;31m',
   reset: '\u001b[0m',
+}
+
+const noTermColors = {
+  bold: '',
+  yellow: '',
+  lightRed: '',
+  reset: '',
 }
 
 function camelCaseToSpaces(text) {
@@ -32,8 +42,17 @@ export function formatParseError(message: string, filePath: string) {
   return errSummary + expectedTokens
 }
 
-function printPosition(text, pos) {
-  return // Disabling for now, as its completely broken anyways.
+interface FormatPositionOpts { loadModule: LoadModuleFn, colorOutput?: boolean }
+function formatPosition(pos, { loadModule, colorOutput = true }: FormatPositionOpts): string {
+  const termColors = colorOutput ? defaultTermColors : noTermColors
+  if (pos.file === Position.internalFile) {
+    // At the moment of writing this code, I don't believe this branch of code will ever execute.
+    // When the stdLib loads, it's errors don't go through this printPosition function.
+    const { bold, reset } = termColors
+    return `At ${bold+'<internal file>'+reset}`
+  }
+
+  const text = loadModule(pos.file)
   const MAX_COLS = 75
   const OVERFLOW_LEFT_PAD = 20
 
@@ -44,7 +63,7 @@ function printPosition(text, pos) {
   const firstCol = pos.col - 1
   const lastCol = newLineCount === 0 ? firstCol + pos.length : effectedText.split('\n').pop().length - 1
 
-  const line = text.split(/\r?\n/)[firstLine - 1]
+  const line = text.split(/\r?\n/)[firstLine - 1] ?? ''
   const lastColOnFirstLine = firstLine === lastLine ? lastCol : line.length
 
   let firstChar = [...line].findIndex(x => x !== ' ')
@@ -70,23 +89,27 @@ function printPosition(text, pos) {
   )
 
   const { bold, yellow, reset } = termColors
-  console.error(`At line ${bold+firstLine+reset}`)
-  console.error()
-  console.error(codeSnippet)
-  console.error(bold + yellow + underline + reset)
+  return [
+    `At line ${bold+firstLine+reset}`,
+    '',
+    codeSnippet,
+    bold + yellow + underline + reset,
+  ].join('\n')
 }
 
-export function prettyPrintLanguageError(err, { ParseError }) {
-  const text = '<unknown file contents>' // TODO: I need to correctly load the file in which the error occurred.
-
+interface PrettyPrintLanguageErrorOpts {
+  ParseError: { new(): Error }
+  loadModule: LoadModuleFn
+}
+export function prettyPrintLanguageError(err: Error, { ParseError, loadModule }: PrettyPrintLanguageErrorOpts) {
   if (err instanceof SemanticError) {
-    const { lightRed, reset } = termColors
+    const { lightRed, reset } = defaultTermColors
     console.error(lightRed + 'Semantic Error: ' + reset + err.message)
-    printPosition(text, err.pos)
+    console.error(formatPosition(err.pos, { loadModule }))
   } else if (err instanceof BadSyntaxError) {
-    const { lightRed, reset } = termColors
+    const { lightRed, reset } = defaultTermColors
     console.error(lightRed + 'Syntax Error: ' + reset + err.message)
-    printPosition(text, err.pos)
+    console.error(formatPosition(err.pos, { loadModule }))
   } else if (err instanceof ParseError) {
     console.error(err.message)
   } else {
@@ -94,3 +117,5 @@ export function prettyPrintLanguageError(err, { ParseError }) {
   }
   return { success: true }
 }
+
+export const _testingHelpers = { formatPosition }

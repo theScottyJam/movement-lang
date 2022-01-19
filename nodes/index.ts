@@ -23,7 +23,6 @@ import * as Type from '../language/Type'
 import * as types from '../language/types'
 import { PURITY, getPurityLevel } from '../language/constants'
 import { pipe, zip, zip3 } from '../util'
-import type { RespTypeState } from './helpers/_RespTypeState'
 export * as value from './value'
 export * as assignmentTarget from './assignmentTarget'
 export * as type from './type'
@@ -37,7 +36,7 @@ type AnyType = Type.AnyType
 
 type ValueOf<T> = T[keyof T]
 
-const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
+const DUMMY_POS = Position.from('<unknown>', { line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
 const top = <T>(array: readonly T[]): T => array[array.length - 1]
 
@@ -119,8 +118,8 @@ InstructionNode.register<BlockPayload, {}>('block', {
 
 // FIXME0: createWithNoPos is a placeholder name. I need to figure out how this is actually different from other pos nodes to get a better name (and make sure it really doesn't need a pos)
 interface SequencePayload { statements: readonly AnyInstructionNode[] }
-export const sequence = (statements: readonly AnyInstructionNode[]) =>
-  InstructionNode.createWithNoPos<SequencePayload>('sequence', { statements })
+export const sequence = (pos: Position, statements: readonly AnyInstructionNode[]) =>
+  InstructionNode.create<SequencePayload>('sequence', pos, { statements })
 
 InstructionNode.register<SequencePayload, {}>('sequence', {
   exec: (rt, { statements }) => {
@@ -138,8 +137,8 @@ InstructionNode.register<SequencePayload, {}>('sequence', {
 })
 
 interface NoopPayload {}
-export const noop = () =>
-  InstructionNode.createWithNoPos<NoopPayload>('noop', {})
+export const noop = (pos: Position) =>
+  InstructionNode.create<NoopPayload>('noop', pos, {})
 
 InstructionNode.register<NoopPayload, {}>('noop', {
   exec: rt => ({ rtRespState: RtRespState.create(), value: values.createUnit() }),
@@ -375,9 +374,8 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
 
 interface GenericParam { typeNode: AnyTypeNode, pos: Position }
 interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
-// FIXME0: The callWithPurity payload entry gets mutated by an outside source to pass information along. This should instead be an event that gets passed along.
 export const invoke = (pos: Position, payload: InvokePayload) =>
-  InstructionNode.create<InvokePayload>('invoke', pos, { ...payload, callWithPurity: PURITY.pure })
+  InstructionNode.create<InvokePayload>('invoke', pos, payload)
 
 InstructionNode.register<InvokePayload, {}>('invoke', {
   exec: (outerRt, { fnExpr, args }) => {
@@ -427,25 +425,23 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       throw new SemanticError(`Found ${argTypes.length} parameter(s) but expected ${fnTypeData.paramTypes.length}.`, pos)
     }
     for (const [arg, assignerParamType, assigneeParamType] of zip3(args, argTypes, fnTypeData.paramTypes)) {
-      // Eventually I need to derive positions from arg.pos
-
       // Check that it uses generics properly
       Type.matchUpGenerics(assigneeParamType, {
         usingType: assignerParamType,
         onGeneric({ self, other }) {
           const genericValue = valuesOfGenericParams.get(self.parameterSentinel)
           if (!genericValue) {
-            Type.assertTypeAssignableTo(other, self.constrainedBy, DUMMY_POS)
+            Type.assertTypeAssignableTo(other, self.constrainedBy, arg.pos, `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type constraint "${Type.repr(self.constrainedBy)}".`)
             valuesOfGenericParams.set(self.parameterSentinel, other)
           } else {
-            Type.assertTypeAssignableTo(other, genericValue, DUMMY_POS)
+            Type.assertTypeAssignableTo(other, genericValue, arg.pos, `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type "${Type.repr(genericValue)}".`)
           }
         },
       })
     }
     // Check purity level
     if (getPurityLevel(fnTypeData.purity) < getPurityLevel(inwardState.minPurity)) {
-      throw new SemanticError(`Attempted to call a function which was less pure than its containing environment.`, fnExpr.pos)
+      throw new SemanticError(`Attempted to call a function which was less pure than its containing environment.`, pos)
     }
 
     // Check purity annotation
@@ -463,21 +459,6 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       }
     })
     return { type: returnType }
-  },
-})
-
-interface CallWithPermissionsPayload { purity: ValueOf<typeof PURITY>, invokeExpr: AnyInstructionNode }
-export const callWithPermissions = (pos: Position, payload: CallWithPermissionsPayload) =>
-  InstructionNode.create<CallWithPermissionsPayload>('callWithPermissions', pos, payload)
-
-InstructionNode.register<CallWithPermissionsPayload, {}>('callWithPermissions', {
-  exec: (rt, { invokeExpr }) => InstructionNode.exec(invokeExpr, rt),
-  typeCheck: (actions, inwardState) => ({ purity, invokeExpr }) => {
-    if (invokeExpr.name !== 'invoke') { // FIXME0: I'm reaching through to make this assertion. Perhaps this assertion should be made before the typeChecking phase starts.
-      throw new Error(`Internal Error: This expression received a purity annotation, but such annotations should only be used on function calls.`)
-    }
-    (invokeExpr.payload as any).callWithPurity = purity // FIXME0: I should not be modifying this
-    return { type: actions.checkType(InstructionNode, invokeExpr, inwardState).type }
   },
 })
 
@@ -562,14 +543,14 @@ InstructionNode.register<MatchPayload, {}>('match', {
   },
 })
 
-interface ImportOpts { from: string }
-interface ImportPayload { rawFrom: string }
+interface ImportOpts { from: string, fromNode: AnyInstructionNode }
+interface ImportPayload { rawFrom: string, fromNode: AnyInstructionNode }
 interface ImportTypePayload { absoluteFrom: string }
-export const import_ = (pos: Position, { from: rawFrom }: ImportOpts) =>
-  InstructionNode.create<ImportPayload>('import', pos, { rawFrom })
+export const import_ = (pos: Position, { from: rawFrom, fromNode }: ImportOpts) =>
+  InstructionNode.create<ImportPayload>('import', pos, { rawFrom, fromNode })
 
 InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
-  exec: (rt, { absoluteFrom: from_ }) => {
+  exec: (rt, { absoluteFrom: from_, fromNode }) => {
     if (rt.cachedModules.mutable.has(from_)) {
       return { rtRespState: RtRespState.create(), value: rt.cachedModules.mutable.get(from_) }
     }
@@ -588,7 +569,7 @@ InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
 
     return { rtRespState: RtRespState.create(), value: module }
   },
-  typeCheck: (actions, inwardState) => ({ pos, rawFrom }) => {
+  typeCheck: (actions, inwardState) => ({ pos, rawFrom, fromNode }) => {
     // §dIPUB - search for a similar implementation that's used elsewhere
     const calcAbsoluteNormalizedPath = (rawPath: string, { relativeToFile }: { relativeToFile: string }) => (
       path.normalize(path.join(path.dirname(relativeToFile), rawPath))
@@ -618,18 +599,6 @@ InstructionNode.register<ImportPayload, ImportTypePayload>('import', {
       typePayload,
     }
   },
-})
-
-// Used to provide information about an import statement nested within.
-// FIXME0: Is there a better way to handle this? Probably not.
-interface ImportMetaOpts { from: string, childNode: AnyInstructionNode }
-interface ImportMetaPayload { dependency: string, childNode: AnyInstructionNode }
-export const importMeta = (pos: Position, { from: dependency, childNode }: ImportMetaOpts) =>
-  InstructionNode.create<ImportMetaPayload>('importMeta', pos, { dependency, childNode })
-
-InstructionNode.register<ImportMetaPayload, {}>('importMeta', {
-  exec: (rt, { childNode }) => InstructionNode.exec(childNode, rt),
-  typeCheck: (actions, inwardState) => ({ childNode }) => ({ type: actions.checkType(InstructionNode, childNode, inwardState).type }),
 })
 
 interface VarLookupPayload { identifier: string }

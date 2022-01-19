@@ -8,6 +8,37 @@ export function zip3<T, U, V>(array1: readonly T[], array2: readonly U[], array3
   return array1.map((array1Element, i) => [array1Element, array2[i], array3[i]])
 }
 
+export function formatErrorValue(value: unknown): string {
+  const truncate = (msg: string, amount=100) => {
+    if (msg.length <= amount) return msg
+    return msg.slice(0, amount - 1) + '…'
+  }
+
+  try {
+    return truncate(JSON.stringify(value))
+  } catch (err) {
+    return truncate(String(value))
+  }
+}
+
+interface MemoizeOpts<Params extends unknown[], CacheKey> {
+  readonly argsToKey?: (...args: Params) => CacheKey
+}
+export function memoize<Params extends unknown[], Return, CacheKey>(
+  ...[fn, { argsToKey }]:
+  [(...args: Params) => Return, MemoizeOpts<Params, CacheKey>?]
+): (...args: Params) => Return {
+  const cache = new Map<CacheKey, Return>()
+  return (...args: Params) => {
+    const key = argsToKey(...args)
+    if (cache.has(key)) return cache.get(key)
+
+    const res = fn(...args)
+    cache.set(key, res)
+    return res
+  }
+}
+
 export function pipe<A>(
   value: A,
 ): A

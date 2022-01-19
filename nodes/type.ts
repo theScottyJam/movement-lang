@@ -1,4 +1,3 @@
-import type { Token } from 'moo'
 import * as InstructionNode from './variants/InstructionNode';
 import * as TypeNode from './variants/TypeNode';
 import type { Actions } from './helpers/typeCheckTools'
@@ -13,8 +12,6 @@ type AnyTypeNode = TypeNode.AnyTypeNode
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type Position = Position.Position
 type AnyType = Type.AnyType
-
-const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
 
 type ValueOf<T> = T[keyof T]
 

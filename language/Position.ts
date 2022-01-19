@@ -1,29 +1,31 @@
 import type { Token } from 'moo'
+import { formatErrorValue } from '../util'
+import * as warnings from '../warnings'
 
 const isPosSymb: unique symbol = Symbol('Position')
-const isPos = (obj): obj is Position => !!obj[isPosSymb]
+export const isPos = (obj: unknown): obj is Position => isPosSymb in Object(obj)
+
+export const internalFile: unique symbol = Symbol('Internal File')
 
 export interface Position {
   [isPosSymb]: true
-  readonly line: number
-  readonly col: number
+  readonly file: string | typeof internalFile
+  readonly line: number // one-indexed
+  readonly col: number // one-indexed
   readonly length: number
-  readonly offset: number
+  readonly offset: number // zero-indexed offset from the start of the script.
 }
 
-const truncate = (msg: string, amount=100) => {
-  if (msg.length <= amount) return msg
-  return msg.slice(0, amount - 1) + '…'
+export function create({ file, line, col, length, offset }): Position {
+  return { [isPosSymb]: true, file, line, col, length, offset }
 }
 
-export function create({ line, col, length, offset }): Position {
-  return { [isPosSymb]: true, line, col, length, offset }
-}
-
-export function from(token: Token): Position {
-  if (token.text == null) throw new Error(`Internal error: Attempted to extract a position out of the non-token '${truncate(JSON.stringify(token))}'`)
+// TODO: Maybe deprecate this? moo-token specific stuff should probably go in grammarParseUtils.ts instead.
+export function from(file: string, token: Token): Position {
+  if (token.text == null) throw new Error(`Internal error: Attempted to extract a position out of the non-token '${formatErrorValue(token)}'`)
   return {
     [isPosSymb]: true,
+    file,
     line: token.line,
     col: token.col,
     length: token.text.length,
@@ -31,14 +33,29 @@ export function from(token: Token): Position {
   }
 }
 
-export function range(token1: Token | Position, token2: Token | Position): Position {
-  const pos1 = isPos(token1) ? token1 : from(token1)
-  const pos2 = isPos(token2) ? token2 : from(token2)
-  return {
-    [isPosSymb]: true,
+export function range(pos1: Position, pos2: Position): Position {
+  if (pos2.offset < pos1.offset) {
+    warnings.warn('INTERNAL ERROR: range() received params in the wrong order.')
+    return range(pos2, pos1)
+  }
+  if (pos1.file !== pos2.file) {
+    warnings.warn('INTERNAL ERROR: Range of positions had different files.')
+  }
+  return create({
+    file: pos1.file,
     line: pos1.line,
     col: pos1.col,
     length: (pos2.offset - pos1.offset) + pos2.length,
     offset: pos1.offset,
-  }
+  })
+}
+
+export function asZeroLength(pos: Position): Position {
+  return create({
+    file: pos.file,
+    line: pos.line,
+    col: pos.col,
+    length: 0,
+    offset: pos.offset,
+  })
 }

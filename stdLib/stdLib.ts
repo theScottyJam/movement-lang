@@ -11,7 +11,7 @@ import * as TypeNode from '../nodes/variants/TypeNode'
 import { PURITY } from '../language/constants'
 import * as Runtime from '../language/Runtime'
 
-const DUMMY_POS = Position.from({ line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
+const STDLIB_POS = Position.create({ file: Position.internalFile, line: 1, col: 1, length: 0, offset: 0 })
 
 type AnyTypeNode = TypeNode.AnyTypeNode
 
@@ -27,19 +27,20 @@ interface ConstructFnOpts {
 
 const construct = {
   bind: (name: string, maybeTypeConstraintNode: AnyTypeNode = null) =>
-    nodes.assignmentTarget.bind(DUMMY_POS, {
+    nodes.assignmentTarget.bind(STDLIB_POS, {
       identifier: name,
       maybeTypeConstraintNode,
-      identPos: DUMMY_POS,
+      identPos: STDLIB_POS,
     }),
 
   fn: ({ purity, paramTypeNodes, returnTypeNode, dependencies = [], body }: ConstructFnOpts) =>
-    nodes.value.function_(DUMMY_POS, {
+    nodes.value.function_(STDLIB_POS, {
       params: paramTypeNodes.map((typeNode, i) => construct.bind('p' + i, typeNode)),
       body: construct._customFnBody({ argCount: paramTypeNodes.length, returnTypeNode, dependencies, fn: body }),
       maybeBodyTypeNode: null,
       purity,
       genericParamDefList: [],
+      posWithoutBody: STDLIB_POS,
     }),
   
   _customFnBody: (() => {
@@ -68,25 +69,25 @@ const construct = {
     })
 
     return ({ argCount, returnTypeNode, dependencies, fn }: InstructionNodePayload) =>
-      InstructionNode.create<InstructionNodePayload>(jsFnBodyName, DUMMY_POS, { argCount, returnTypeNode, dependencies, fn })
+      InstructionNode.create<InstructionNodePayload>(jsFnBodyName, STDLIB_POS, { argCount, returnTypeNode, dependencies, fn })
     })(),
 
   record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
-    nodes.value.record(DUMMY_POS, {
+    nodes.value.record(STDLIB_POS, {
       content: new Map(
         Object.entries(mapping)
           .map(([key, node]) => [key, { target: node, maybeRequiredTypeNode: null }]
       )),
     }),
 
-  internalTag: () => nodes.value.tag(DUMMY_POS, {
+  internalTag: () => nodes.value.tag(STDLIB_POS, {
     genericParamDefList: [],
-    typeNode: nodes.type.nodeFromTypeGetter(DUMMY_POS, {
+    typeNode: nodes.type.nodeFromTypeGetter(STDLIB_POS, {
       typeGetter: () => types.createInternal()
     }),
   }),
 
-  simpleType: typeName => nodes.type.simpleType(DUMMY_POS, { typeName })
+  simpleType: typeName => nodes.type.simpleType(STDLIB_POS, { typeName })
 }
 
 const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstructionNode } = () => {
@@ -98,9 +99,9 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
   // TODO: I should support more than ints
   stdLibDef.Mutable = construct.record((() => {
     const MutableDef: any = {}
-    const mutableTagTypeNode = (varName: string) => nodes.type.nodeFromTypeGetter(DUMMY_POS, {
+    const mutableTagTypeNode = (varName: string) => nodes.type.nodeFromTypeGetter(STDLIB_POS, {
       typeGetter: actions =>
-        Type.getTypeMatchingDescendants(actions.follow.lookupVar(varName).type, DUMMY_POS)
+        Type.getTypeMatchingDescendants(actions.follow.lookupVar(varName).type, STDLIB_POS)
     })
     
     MutableDef.create = construct.fn({
@@ -144,22 +145,22 @@ export const createStdLibAst = () => {
   const { public: public_, private: private_ } = createStdLibMapping()
     return nodes.createApi({
       dependencies: [],
-      content: nodes.moduleRoot(DUMMY_POS, {
-        content: nodes.declaration(DUMMY_POS, {
+      content: nodes.moduleRoot(STDLIB_POS, {
+        content: nodes.declaration(STDLIB_POS, {
           declarations: Object.entries(private_)
             .map(([key, value]) => ({
               assignmentTarget: construct.bind(key),
               expr: value,
-              assignmentTargetPos: DUMMY_POS
+              assignmentTargetPos: STDLIB_POS
             })),
-          nextExpr: nodes.declaration(DUMMY_POS, {
+          nextExpr: nodes.declaration(STDLIB_POS, {
             declarations: Object.entries(public_)
               .map(([key, value]) => ({
                 assignmentTarget: construct.bind(key),
                 expr: value,
-                assignmentTargetPos: DUMMY_POS
+                assignmentTargetPos: STDLIB_POS
               })),
-            nextExpr: nodes.noop(),
+            nextExpr: nodes.noop(STDLIB_POS),
             newScope: false,
             export: true,
           }),

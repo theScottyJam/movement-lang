@@ -7,6 +7,8 @@ import * as types from './language/types'
 import * as values from './language/values'
 import type { AstApi } from './nodes/variants/AstApi' // TODO: Maybe I need to move this type definition into a more accessible location
 import { createStdLibAst } from './stdLib/stdLib'
+import * as warnings from './warnings'
+import { GrammarBoundary } from './grammarBoundary'
 import { formatParseError, prettyPrintLanguageError } from './errorFormatting'
 import builtGrammar from './grammar.built'
 
@@ -15,6 +17,8 @@ globalThis.debug = (...args) => {
   console.info(...args)
   return args[args.length - 1]
 }
+
+const top = <T>(array: readonly T[]): T => array[array.length - 1]
 
 const compiledGrammar = nearley.Grammar.fromCompiled(builtGrammar)
 
@@ -43,7 +47,7 @@ function expectErrorOfTypes<T>(callback: () => T, errorTypes: (new (...args: unk
   }
 }
 
-function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): AstApi {
+function parse(text: string, { path }: { path: string }): AstApi {
   // A fresh parser needs to be made between each parse.
   const parser = new nearley.Parser(compiledGrammar);
 
@@ -52,12 +56,17 @@ function parse(text: string, { pathForErrMsg }: { pathForErrMsg: string }): AstA
   } catch (err) {
     if (!('token' in err)) throw err
     if (!err.message.startsWith('Syntax error')) throw err
-    throw new ParseError(formatParseError(err.message, pathForErrMsg))
+    throw new ParseError(formatParseError(err.message, path))
   }
 
   if (parser.results.length === 0) throw new BadSyntaxError('Unexpected end-of-file.', null)
   if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
-  return parser.results[0]
+  const endOfFileInfo = {
+    line: text.split('\n').length,
+    col: top(text.split('\n')).length,
+    offset: text.length,
+  }
+  return GrammarBoundary.eval(parser.results[0], path, endOfFileInfo) as AstApi
 }
 
 // §dIPUB - search for a similar implementation that's used elsewhere
@@ -79,7 +88,7 @@ function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts =
     if (moduleDefinitions.has(pathToLoad)) continue
     const source = loadModuleSource(pathToLoad)
     if (source == null) throw new Error(`Module not found: ${pathToLoad}`)
-    const module = parse(source, { pathForErrMsg: path_ })
+    const module = parse(source, { path: pathToLoad })
     moduleDefinitions.set(pathToLoad, module)
     const normalizedDependencies = module.dependencies.map(
       dependency => calcAbsoluteNormalizedPath(dependency, { relativeToFile: pathToLoad })
@@ -157,7 +166,17 @@ export function run(fileToRun: string) {
     }), [])
     return { module, moduleShape }
   } catch (err) {
-    const { success } = prettyPrintLanguageError(err, { ParseError })
+    const { success } = prettyPrintLanguageError(err, {
+      ParseError,
+      loadModule(path) {
+        try {
+          return fs.readFileSync(path, 'utf-8')
+        } catch (err) {
+          warnings.warnError(err)
+          return ''
+        }
+      }
+    })
     if (!success) {
       throw err
     }
@@ -165,7 +184,7 @@ export function run(fileToRun: string) {
 }
 
 interface TestRunOpts {
-  readonly modules: { [path: string]: string }
+  readonly modules?: { [path: string]: string }
 }
 export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { modules: {} }) {
   let result = []

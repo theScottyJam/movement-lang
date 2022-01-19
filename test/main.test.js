@@ -22,7 +22,7 @@ describe('Literals', () => {
   })
 
   test('It throws on an invalid escape sequence', () => {
-    expect(() => customTestRun(String.raw`print 'x \a'`)[0].raw).toThrow('x \\a')
+    expect(() => customTestRun(String.raw`print 'x \a'`)[0].raw).toThrow('Unrecognized string escape sequence "\\a". -- \'x \\a\'.')
   })
 
   test('It creates a record', () => {
@@ -142,11 +142,11 @@ describe('Assignment', () => {
 
   test('Duplicate assignment is disallowed', () => {
     expect(() => customTestRun('let x = 2; let x = 3'))
-      .toThrow('Identifier "x" already exists in scope, please choose a different name.')
+      .toThrow('Identifier "x" already exists in scope, please choose a different name. -- x.')
     expect(() => customTestRun('begin { let x = 2; let x = 3 }'))
-      .toThrow('Identifier "x" already exists in scope, please choose a different name.')
+      .toThrow('Identifier "x" already exists in scope, please choose a different name. -- x.')
     expect(() => customTestRun('print let x = 2 let x = 3 in x'))
-      .toThrow('Identifier "x" already exists in scope, please choose a different name.')
+      .toThrow('Identifier "x" already exists in scope, please choose a different name. -- x.')
   })
 
   test('Shadowing is allowed', () => {
@@ -165,7 +165,7 @@ describe('Assignment', () => {
 
   test('"$" can not be accessed', () => {
     expect(() => customTestRun('let $ = 2; print $'))
-      .toThrow('Attempted to access undefined variable $')
+      .toThrow('Attempted to access undefined variable $ -- $.')
   })
 })
 
@@ -184,58 +184,69 @@ describe('Functions', () => {
   test('Calling with correct purity levels', () => {
     expect(customTestRun('let fn = () => 2; begin { print fn() }')[0].raw).toBe(2n)
     expect(() => customTestRun('let fn = () => 2; begin { print get fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must not use any purity annotations')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must not use any purity annotations -- fn().')
     expect(() => customTestRun('let fn = () => 2; begin { print run fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must not use any purity annotations')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must not use any purity annotations -- fn().')
     expect(() => customTestRun('let fn = gets () => 2; begin { print fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get"')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get" -- fn().')
     expect(customTestRun('let fn = gets () => 2; begin { print get fn() }')[0].raw).toBe(2n)
     expect(() => customTestRun('let fn = gets () => 2; begin { print run fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get"')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get" -- fn().')
     expect(() => customTestRun('function fn() { return 2 }; begin { print fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "run"')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "run" -- fn().')
     expect(() => customTestRun('function fn() { return 2 }; begin { print get fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "run"')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "run" -- fn().')
     expect(customTestRun('function fn() { return 2 }; begin { print run fn() }')[0].raw).toBe(2n)
+
+    // Testing get/run as a statement
+    expect(customTestRun('let fn = gets () => print 2; begin { get fn() }')[0].raw).toBe(2n)
+    expect(customTestRun('function fn() { print 2 }; begin { run fn() }')[0].raw).toBe(2n)
   })
 
   test('Using a purity annotation in an incorrect location', () => {
     expect(() => customTestRun('let fn = gets () => 2; print get fn()'))
-      .toThrow('Attempted to call a function which was less pure than its containing environment.')
+      .toThrow('Attempted to call a function which was less pure than its containing environment. -- fn().')
     expect(() => customTestRun('let fn = gets () => 2; let fn2 = () => get fn()'))
-      .toThrow('Attempted to call a function which was less pure than its containing environment.')
+      .toThrow('Attempted to call a function which was less pure than its containing environment. -- fn().')
     expect(() => customTestRun('function fn() { return 2 }; let fn2 = () => run fn()'))
-      .toThrow('Attempted to call a function which was less pure than its containing environment.')
+      .toThrow('Attempted to call a function which was less pure than its containing environment. -- fn().')
     expect(() => customTestRun('function fn() { return 2 }; let fn2 = gets () => run fn()'))
-      .toThrow('Attempted to call a function which was less pure than its containing environment.')
+      .toThrow('Attempted to call a function which was less pure than its containing environment. -- fn().')
+  })
+
+  test('Can not use a purity annotation on a non-function', () => {
+    expect(() => customTestRun('print get 2'))
+      .toThrow('This expression received a purity annotation, but such annotations should only be used on function calls. -- 2.')
+    expect(() => customTestRun('begin { get 2 }'))
+      .toThrow('This expression received a purity annotation, but such annotations should only be used on function calls. -- 2.')
   })
 
   test('Can not use return outside of a function', () => {
     expect(() => customTestRun('begin { return 2 }'))
-      .toThrow('Can not use a return outside of a function.')
+      .toThrow('Can not use a return outside of a function. -- return 2.')
     expect(() => customTestRun('begin { if false { return 2 } }'))
-      .toThrow('Can not use a return outside of a function.')
+      .toThrow('Can not use a return outside of a function. -- return 2.')
   })
 })
 
 describe('Scoping', () => {
   test('Unable to access variables outside of block scope', () => {
     expect(() => customTestRun('begin { if true { let x = 2 }; print x }'))
-      .toThrow('Attempted to access undefined variable x')
+      .toThrow('Attempted to access undefined variable x -- x.')
     expect(() => customTestRun('begin { if false { let x = 2 }; print x }'))
-      .toThrow('Attempted to access undefined variable x')
+      .toThrow('Attempted to access undefined variable x -- x.')
   })
 
   test('Unable to access variables outside of expression-let scope', () => {
     expect(() => customTestRun('let result = let x = 2 in x print x'))
-      .toThrow('Attempted to access undefined variable x')
+      .toThrow('Attempted to access undefined variable x -- x.')
   })
 
   test('Unable to access variables outside of function scope', () => {
     expect(() => customTestRun('function fn() { let x = 2 } begin { run fn() print x }'))
-      .toThrow('Attempted to access undefined variable x')
+      .toThrow('Attempted to access undefined variable x -- x.')
     expect(() => customTestRun('function fn() { let x = 2 } print x'))
-      .toThrow('Attempted to access undefined variable x')
+      .toThrow('Attempted to access undefined variable x -- x.')
   })
 
   test('Able to close over variables', () => {
@@ -272,31 +283,36 @@ describe('Types', () => {
   })
 
   test('Can not assign to incorrect primitive type declarations', () => {
-    expect(() => customTestRun('let x #boolean = 2; print x')).toThrow('Found type "#int", but expected type "#boolean"')
-    expect(() => customTestRun('let x #string = true; print x')).toThrow('Found type "#boolean", but expected type "#string"')
-    expect(() => customTestRun("let x #int = 'abc'; print x")).toThrow('Found type "#string", but expected type "#int"')
+    expect(() => customTestRun('let x #boolean = 2; print x'))
+      .toThrow('Can not assign the type "#int" to an lvalue with the constraint \"#boolean\". -- x.')
+    expect(() => customTestRun('let x #string = true; print x'))
+      .toThrow('Can not assign the type \"#boolean\" to an lvalue with the constraint \"#string\". -- x.')
+    expect(() => customTestRun("let x #int = 'abc'; print x"))
+      .toThrow('Can not assign the type \"#string\" to an lvalue with the constraint \"#int\". -- x.')
+    expect(() => customTestRun("let { x: y #int } = { x: 'abc' }; print x"))
+      .toThrow('Can not assign the type \"#string\" to an lvalue with the constraint \"#int\". -- y.')
   })
 
   test('Record types', () => {
     expect(customTestRun('let x #{ x #int } = { x: 2 }').length).toBe(0)
     expect(customTestRun('let x #{ x #int } = { x: 2, y: 3 }').length).toBe(0)
     expect(() => customTestRun('let x #{ x #int, y #int } = { x: 2 }'))
-      .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }".')
+      .toThrow('Can not assign the type "#{ x #int }" to an lvalue with the constraint "#{ x #int, y #int }". -- x.')
   })
 
   test('Core function types', () => {
     expect(customTestRun('let fn #(#int) => #int = (x #int) => x').length).toBe(0)
     expect(() => customTestRun('let fn #() => #int = (x #int) => x'))
-      .toThrow('Found type "#(#int) => #int", but expected type "#() => #int".')
+      .toThrow('Can not assign the type "#(#int) => #int" to an lvalue with the constraint "#() => #int". -- fn.')
     expect(() => customTestRun('let fn #(#int, #int) => #int = (x #int) => x'))
-      .toThrow('Found type "#(#int) => #int", but expected type "#(#int, #int) => #int".')
+      .toThrow('Can not assign the type "#(#int) => #int" to an lvalue with the constraint "#(#int, #int) => #int". -- fn.')
     expect(() => customTestRun('let fn #(#int) => #string = (x #int) => x'))
-      .toThrow('Found type "#(#int) => #int", but expected type "#(#int) => #string".')
+      .toThrow('Can not assign the type "#(#int) => #int" to an lvalue with the constraint "#(#int) => #string". -- fn.')
     expect(customTestRun('let fn #() => #{ x #int } = () => { x: 2, y: 3 }').length).toBe(0)
     expect(() => customTestRun('let fn #() => #{ x #int, y #int } = () => { x: 2 }'))
-      .toThrow('Found type "#() => #{ x #int }", but expected type "#() => #{ x #int, y #int }".')
+      .toThrow('Can not assign the type "#() => #{ x #int }" to an lvalue with the constraint "#() => #{ x #int, y #int }". -- fn.')
     expect(customTestRun('let fn #(#{ x #int, y #int }) => #int = (x #{ x #int }) => 2').length).toBe(0)
-    expect(() => customTestRun('let fn #(#{ x #int }) => #int = (x #{ x #int, y #int }) => 2').length).toThrow('Found type "#(#{ x #int, y #int }) => #int", but expected type "#(#{ x #int }) => #int".')
+    expect(() => customTestRun('let fn #(#{ x #int }) => #int = (x #{ x #int, y #int }) => 2').length).toThrow('Can not assign the type "#(#{ x #int, y #int }) => #int" to an lvalue with the constraint "#(#{ x #int }) => #int". -- fn')
   })
 
   test('Function type purity', () => {
@@ -305,21 +321,21 @@ describe('Types', () => {
     expect(customTestRun('let fn #function() #int = () => 2').length).toBe(0)
 
     expect(() => customTestRun('let fn #() => #int = gets () => 2'))
-      .toThrow('Found type "#gets () => #int", but expected type "#() => #int".')
+      .toThrow('Can not assign the type "#gets () => #int" to an lvalue with the constraint "#() => #int". -- fn.')
     expect(customTestRun('let fn #gets () => #int = gets () => 2').length).toBe(0)
     expect(customTestRun('let fn #function() #int = gets () => 2').length).toBe(0)
 
     expect(() => customTestRun('function fn() {}; let fn2 #() => #unit = fn'))
-      .toThrow('Found type "#function() #unit", but expected type "#() => #unit".')
+      .toThrow('Can not assign the type "#function() #unit" to an lvalue with the constraint "#() => #unit". -- fn2.')
     expect(() => customTestRun('function fn() {}; let fn2 #gets () => #unit = fn'))
-      .toThrow('Found type "#function() #unit", but expected type "#gets () => #unit".')
+      .toThrow('Can not assign the type "#function() #unit" to an lvalue with the constraint "#gets () => #unit". -- fn2.')
     expect(customTestRun('function fn() {}; let fn2 #function() #unit = fn').length).toBe(0)
   })
 
   test('Calling with correct purity annotations depends on current type, not underlying type', () => {
     expect(customTestRun('let fn #gets () => #int = () => 2; begin { print get fn() }')[0].raw).toBe(2n)
     expect(() => customTestRun('let fn #gets () => #int = () => 2; begin { print fn() }'))
-      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get"')
+      .toThrow('Attempted to do this function call with the wrong purity annotation. You must use "get" -- fn().')
   })
 
   test('Each return must provide compatible types.', () => {
@@ -331,49 +347,49 @@ describe('Types', () => {
     expect(customTestRun('function fn(cb #function()#never) { run cb() }; _printType fn')[0]).toBe('#function(#function() #never) #never')
 
     expect(() => customTestRun('function fn() { if true { return { x: 2 } } else { return { y: 2 } } }; _printType fn'))
-      .toThrow('Failed to find a common type among the possible return types of this function.')
+      .toThrow('Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation. -- function fn().')
     expect(() => customTestRun("function fn() { if true { return { x: 2 } } else { return { x: 'string' } } }; _printType fn"))
-      .toThrow('Failed to find a common type among the possible return types of this function.')
+      .toThrow('Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation. -- function fn().')
     expect(() => customTestRun("function fn() { if true { return 2 } else { return 'string' } }; _printType fn")[0])
-      .toThrow('Failed to find a common type among the possible return types of this function.')
+      .toThrow('Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation. -- function fn().')
     
     // Three returns
     expect(() => customTestRun('function fn() { if true { return { x: 2 } } else if true { return { y: 2 } } else { return { x: 3, y: 3 } } }; _printType fn'))
-      .toThrow('Failed to find a common type among the possible return types of this function.')
+      .toThrow('Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation. -- function fn().')
     expect(customTestRun('function fn(cb #()=>#never) { if true { return cb() } else { return { x: 2 } } }; _printType fn')[0]).toBe('#function(#() => #never) #{ x #int }')
     expect(() => customTestRun('function fn(cb #()=>#never) { if true { return cb() } else if true { return { x: 2 } } else { return { y: 2 } } }; _printType fn'))
-      .toThrow('Failed to find a common type among the possible return types of this function.')
+      .toThrow('Failed to find a common type among the possible return types of this function. Please provide an explicit type annotation. -- function fn(cb #()=>#never).')
     expect(customTestRun('function fn() { if true { return { x: 2 } } else if true { return { x: 2, y: 2 } } else { return { x: 2, z: 3 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
     expect(customTestRun('function fn() { if true { return { x: 2, z: 3 } } else if true { return { x: 2, y: 2 } } else { return { x: 2 } } }; _printType fn')[0]).toBe('#function() #{ x #int }')
   })
 
   test('Assignment can not be used to widen types', () => {
     expect(() => customTestRun('let x #{ x #int } = { x: 2 } as #{}'))
-      .toThrow('Found type "#{}", but expected type "#{ x #int }".')
+      .toThrow('Can not assign the type "#{}" to an lvalue with the constraint "#{ x #int }". -- x.')
   })
 
   test('"as" operator', () => {
     expect(customTestRun('let obj = { x: 2 } as #{}').length).toBe(0)
     expect(() => customTestRun('let obj = { x: 2 } as #{ x #int, y #int }').length)
-      .toThrow('"as" type assertion failed - failed to convert a type from "#{ x #int }" to #{ x #int, y #int }')
+      .toThrow('"as" type assertion failed - failed to convert a type from "#{ x #int }" to #{ x #int, y #int }') // runtime error
     expect(() => customTestRun('let obj = { x: 2 } as #{ y #int }').length)
-      .toThrow('Attempted to change a type from "#{ x #int }" to type "#{ y #int }". "as" type assertions can only widen or narrow a provided type.')
+      .toThrow('Attempted to change a type from "#{ x #int }" to type "#{ y #int }". "as" type assertions can only widen or narrow a provided type. -- as #{ y #int }.')
     expect(() => customTestRun('let obj = { x: 2 } as #int').length)
-    .toThrow('Attempted to change a type from "#{ x #int }" to type "#int". "as" type assertions can only widen or narrow a provided type.')
+      .toThrow('Attempted to change a type from "#{ x #int }" to type "#int". "as" type assertions can only widen or narrow a provided type. -- as #int.')
     expect(() => customTestRun('let obj = { x: 2, y: 3 } as #{ x #int }; print obj.y'))
-      .toThrow('Failed to find the identifier "y" on the record of type #{ x #int }.')
+      .toThrow('Failed to find the identifier "y" on the record of type #{ x #int }. -- obj.y')
     expect(customTestRun('let obj1 #{ x #int } = { x: 2, y: 3 }; let obj2 = obj1 as #{ x #int, y #int }; print obj2.y')[0].raw).toBe(3n)
     expect(() => customTestRun('let obj1 #{ x #int } = { x: 2, y: 3 }; let obj2 = obj1 as #{ y #int }'))
-      .toThrow('Attempted to change a type from "#{ x #int }" to type "#{ y #int }". "as" type assertions can only widen or narrow a provided type.')
+      .toThrow('Attempted to change a type from "#{ x #int }" to type "#{ y #int }". "as" type assertions can only widen or narrow a provided type. -- as #{ y #int }.')
   })
 
   test('Both arms of expression-if must return compatible types', () => {
     expect(customTestRun('print if true then { x: 2 } else { x: 3 }')[0].raw.get('x').raw).toBe(2n)
     expect(customTestRun('print if true then { x: 2 } else { x: 3, y: 2 }')[0].raw.get('x').raw).toBe(2n)
     expect(() => customTestRun('print if true then { x: 2 } else { y: 2 }'))
-      .toThrow('The following "if true" case of this condition has the type "#{ x #int }", which is incompatible with the "if not" case\'s type, "#{ y #int }"')
+      .toThrow('The following "if true" case of this condition has the type "#{ x #int }", which is incompatible with the "if not" case\'s type, "#{ y #int }". -- { x: 2 }.')
     expect(() => customTestRun('print if true then { x: 2, z: 0 } else { y: 2, z: 1 }'))
-      .toThrow('The following "if true" case of this condition has the type "#{ x #int, z #int }", which is incompatible with the "if not" case\'s type, "#{ y #int, z #int }"')
+      .toThrow('The following "if true" case of this condition has the type "#{ x #int, z #int }", which is incompatible with the "if not" case\'s type, "#{ y #int, z #int }". -- { x: 2, z: 0 }.')
     expect(customTestRun('type alias #MyRec = #{ z #int }; print if true then { x: 2, z: 0 } as #MyRec else { y: 2, z: 1 } as #MyRec'))
   })
 })
@@ -393,7 +409,7 @@ describe('Pattern matching', () => {
     `)[0].raw).toBe(8n)
 
     expect(() => customTestRun('print match { x: 2 } { when { x: X, y: Y } then Y }'))
-      .toThrow('Could not auto-determine the type of this lvalue, please specify it with a type constraint.')
+      .toThrow('Could not auto-determine the type of this lvalue, please specify it with a type constraint. -- Y.')
   })
 
   test('Pattern matching with basic primitives', () => {
@@ -408,7 +424,7 @@ describe('Pattern matching', () => {
 
   test('Pattern matching will fail when operating on unrelated types', () => {
     expect(() => customTestRun('print match 2 { when { x: x } then 0 }'))
-      .toThrow('Found type #int but expected a record.')
+      .toThrow('Attempted to perform a record-destructure on the non-record type #int. -- { x: x }.')
   })
 
   test('Nested record pattern in pattern matching', () => {
@@ -459,18 +475,18 @@ describe('Imports', () => {
         'mod1': "import $ from './mod2'",
         'mod2': "import $ from './mod1'",
       }
-    })).toThrow('Circular dependency detected')
+    })).toThrow("Circular dependency detected -- import $ from './mod1'")
   })
 
   test('Can not use export in the main module', () => {
     expect(() => customTestRun("export let x = 2"))
-      .toThrow('Can not export from a main module')
+      .toThrow('Can not export from a main module -- export let x = 2.')
   })
 
   test('Can not use a begin block in an imported module', () => {
     expect(() => customTestRun("import $ from './other'", {
       modules: { 'other': 'begin { print 2 }' }
-    })).toThrow('Can not use a begin block in an imported module')
+    })).toThrow('Can not use a begin block in an imported module -- begin { print 2 }.')
   })
 
   test('Modules can access local variables', () => {
@@ -482,10 +498,10 @@ describe('Imports', () => {
   test("Modules don't expose non-exported variables", () => {
     expect(() => customTestRun("import other from './other'; print other.x", {
       modules: { 'other': 'let x = 2' }
-    })).toThrow('Failed to find the identifier "x" on the record of type #{}')
+    })).toThrow('Failed to find the identifier "x" on the record of type #{}. -- other.x.')
     expect(() => customTestRun("import other from './other'; let other2 = other as #{ x #int }; print other2.x", {
       modules: { 'other': 'let x = 2' }
-    })).toThrow('"as" type assertion failed - failed to convert a type from "#{}" to #{ x #int }')
+    })).toThrow('"as" type assertion failed - failed to convert a type from "#{}" to #{ x #int }') // Runtime error
   })
 
   test("Modules don't expose types of non-exported variables in the module-type", () => {
@@ -503,12 +519,12 @@ describe('tags', () => {
 
   test('Tags can only unbox their own kind', () => {
     expect(() => customTestRun('let a = tag #int; let b = tag #int; let boxed = a@ 2; let b@ x = boxed'))
-      .toThrow('Found type "#:tag #int", but expected type "#:tag #int".')
+      .toThrow('Attempted to perform a tag-destructure with type \"#:tag #int\" on an lvalue of an incompatible tag \"#:tag #int\". -- b@ x.')
   })
 
   test('Each tag has a unique type', () => {
     expect(() => customTestRun('let a = tag #int; let b = tag #int; let result = if true then a else b'))
-      .toThrow('The following "if true" case of this condition has the type "#typeof<tag #int>", which is incompatible with the "if not" case\'s type, "#typeof<tag #int>".')
+      .toThrow('The following "if true" case of this condition has the type "#typeof<tag #int>", which is incompatible with the "if not" case\'s type, "#typeof<tag #int>". -- a.')
   })
 
   test('Tags in pattern matching', () => {
@@ -516,7 +532,7 @@ describe('tags', () => {
     // You need to know which tag you're unwrapping in advance.
     // (The plan is, if the tag is part of a variant, then you're allowed to pattern match against each variant, otherwise, you can't).
     expect(() => customTestRun('let a = tag #int; let b = tag #int; print match a@ 2 { when b@ x then x; when a@ x then x + 1 }'))
-      .toThrow('Found type "#:tag #int", but expected type "#:tag #int".')
+      .toThrow('Attempted to perform a tag-destructure with type \"#:tag #int\" on an lvalue of an incompatible tag \"#:tag #int\". -- b@ x')
   })
 
   test('Type checking against tags', () => {
@@ -530,12 +546,13 @@ describe('tags', () => {
 
   test('Can not use "#:" syntax on descendants of a tag', () => {
     expect(() => customTestRun('let a = tag #int; let boxed = a@ 2; type alias #BadType = #:boxed'))
-      .toThrow('The provided value can not be used to make a descendent-matching type.')
+      .toThrow('The provided value can not be used to make a descendent-matching type. -- #:boxed.')
   })
 })
 
 describe('Etc', () => {
   test('Able to have odd spacing', () => {
+    expect(customTestRun('').length).toBe(0)
     expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
     expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
     expect(customTestRun('begin{print 2 ; print 3}')[1].raw).toBe(3n)
@@ -572,7 +589,7 @@ describe('Generics', () => {
     expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn<#int, #string>(false, 2, 'hi')")[0].raw).toBe('hi')
 
     expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 'hi')"))
-      .toThrow('Found type "#string", but expected type "#int".')
+      .toThrow('Failed to match a type found from an argument, \"#string\", with the generic param type \"#int\". -- \'hi\'.')
   })
 
   // TODO: I assume this has the same issue as the "Type constraints on generics" test
@@ -585,7 +602,7 @@ describe('Generics', () => {
     expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string>(2)"))
       .toThrow('Found type "#int", but expected type "#string".')
     expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, 2, 'hi')"))
-      .toThrow('Found type "#string", but expected type "#int".')
+      .toThrow('Found type "#string", but expected type "#int". -- ?')
 
     expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, { x: 2 }, { x: 4, y: 3 }).x")[0].raw).toBe(2n)
     expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; _printType fn(true, { x: 2 }, { x: 4, y: 3 })")[0]).toBe('#{ x #int }')
@@ -593,7 +610,7 @@ describe('Generics', () => {
 
   test('Provide too many generic params', () => {
     expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string, #int>(2)"))
-      .toThrow('The function of type #(#T) => #T must be called with at most 1 generic parameters, but got called with 2.')
+      .toThrow('The function of type #(#T) => #T must be called with at most 1 generic parameters, but got called with 2. -- fn<#string, #int>(2).')
   })
 
   // TODO: I need a way to automatically instantiate generic types to fix these tests
@@ -604,13 +621,13 @@ describe('Generics', () => {
     expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ y #int }>({ inner: { y: 4 } })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 2 } })'))
-      .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }".')
+      .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }". -- ?')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ y: 4 })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { y: 4 } })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }".')
+      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
   })
 
   test('Generic return types/values', () => {
@@ -621,7 +638,7 @@ describe('Generics', () => {
   test('Multiple generics when destructuring', () => {
     expect(customTestRun("let fn = <#T>({ a: a #T, b: b #T }) => b; print fn({ a: 2, b: 3 })")[0].raw).toBe(3n)
     expect(() => customTestRun("let fn = <#T>({ a: a #T, b: b #T }) => b; print fn({ a: 2, b: 'hi' })"))
-      .toThrow('Found type "#string", but expected type "#int".')
+      .toThrow('Failed to match a type found from an argument, \"#string\", with the generic param type \"#int\". -- { a: 2, b: \'hi\' }.')
 
     expect(customTestRun("let fn = <#T, #U>({ a: a #T, b: b #U }) => { x: a, y: b }; print fn({ a: 2, b: 'hi' }).y")[0].raw).toBe('hi')
   })
@@ -633,9 +650,9 @@ describe('Generics', () => {
     // expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => let x #U = a in x; print fn(2, 'hi')"))
     //   .toThrow('?')
     expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => if true then a else b; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
-      .toThrow('The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case\'s type, "#U".')
+      .toThrow('The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case\'s type, "#U". -- a')
     expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => let z #U = a in z; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
-      .toThrow('Found type "#T", but expected type "#U".')
+      .toThrow('Can not assign the type "#T" to an lvalue with the constraint "#U". -- z.')
   })
 
   // TODO

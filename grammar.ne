@@ -18,16 +18,26 @@
 
 @{%
   import * as nodes from './nodes/index'
-  import * as InstructionNode from './nodes/variants/InstructionNode'
-  import * as TypeNode from './nodes/variants/TypeNode'
   import moo from 'moo'
-  import * as Type from './language/Type'
-  import * as types from './language/types'
   import { PURITY } from './language/constants'
-  import { from as asPos, range } from './language/Position'
-  import { SemanticError } from './language/exceptions'
+  import * as Position from './language/Position'
+  import { BadSyntaxError, SemanticError } from './language/exceptions'
+  import { deepRange } from './grammarParseUtils'
+  import { GrammarBoundary } from './grammarBoundary'
 
-  const DUMMY_POS = asPos({ line: 1, col: 1, offset: 0, text: '' } as moo.Token) // TODO - get rid of all occurances of this
+  const asPos = Position.from
+  const boundary = (callback: any) => GrammarBoundary.create(callback) as any
+  const rawBoundary = (callback: any) => GrammarBoundary.createRaw(callback) as any
+  const DUMMY_POS = asPos('<unknown>', { line: 1, col: 1, offset: 0, text: '' } as moo.Token) // TODO - get rid of all occurances of this
+
+  const chanel = {
+    stringLiteralImportPath: Symbol('string literal import path chanel'),
+    dependency: Symbol('dependency chanel'),
+    callWithPurity: Symbol('call with purity'),
+    isInvokeExpr: Symbol('is invoke expression'),
+  }
+
+  const assertFalse = () => { throw new Error('Assertion failed') }
 %}
 
 @{%
@@ -156,130 +166,149 @@ nonEmptyDeliminated[PATTERN, DELIMITER, TRAILING_DELIMITER]
 
 root
   -> _ deliminated[importStatement (_ ";"):?, _, _] deliminated[moduleLevelStatement (_ ";"):?, _, _] (%begin _ block _):? {%
-    ([, importEntries, statementEntries, beginBlockEntry]) => {
-      const [,, beginBlock] = beginBlockEntry ?? [,,, null]
-      const makeImportNodes = importEntries.map(x => x[0]).flat()
-      const statements = statementEntries.map(x => x[0]).flat()
-      const rootNodeWithoutImports = statements.reverse().reduce((previousNode, makeNode) => (
+    rawBoundary((getArgValue, { pos, nextTokenPos }, [, importEntries, statementEntries, beginBlockEntry]) => {
+      const [beginToken_,, beginBlock_] = beginBlockEntry ?? [,,, null]
+      const beginToken = getArgValue(beginToken_).result
+      const beginBlock = getArgValue(beginBlock_).result
+      const makeImportNodes_ = importEntries.map(x => getArgValue(x[0])).flat()
+      const makeImportNodes = makeImportNodes_.map(x => x.result)
+      const imports = makeImportNodes_.map(x => x.directOutput[chanel.dependency] ?? assertFalse())
+      const statements = statementEntries.map(x => getArgValue(x[0]).result).flat()
+      const endPos = Position.asZeroLength(nextTokenPos) // This isn't the most accurate, as it doesn't handle whitesapce.
+
+      const firstNode = [...makeImportNodes, ...statements].reverse().reduce((previousNode, makeNode) => (
         makeNode(previousNode)
-      ), beginBlock ? nodes.beginBlock(DUMMY_POS, beginBlock) : nodes.noop())
-      const { imports, previousNode: firstNode } =
-        makeImportNodes.reverse().reduce(({ imports, previousNode }, makeNode) => {
-          const newNode = makeNode(previousNode)
-          return { imports: [...imports, newNode.payload.dependency], previousNode: newNode } // FIXME0: I'm reaching into another node's internal data
-        }, { imports: [], previousNode: rootNodeWithoutImports })
+      ), beginBlock ? nodes.beginBlock(deepRange(pos.file, [beginToken, beginBlock]), beginBlock) : nodes.noop(endPos))
       return nodes.createApi({
-        content: nodes.moduleRoot(DUMMY_POS, { content: firstNode }),
+        content: nodes.moduleRoot(pos, { content: firstNode }),
         dependencies: imports,
       })
-    }
+    })
   %}
 
 importStatement
   -> "import" _ assignmentTarget _ "from" _ stringLiteral {%
-    ([,, assignmentTarget,, ,, stringLiteral]) => nextNode => (
-      nodes.importMeta(DUMMY_POS, {
-        from: stringLiteral.payload.value, // FIXME0: I'm reaching into the data of something else.
-        childNode: nodes.declaration(DUMMY_POS, {
+    rawBoundary((getArgValue, { pos }, [,, assignmentTarget_,, ,, stringLiteral_]) => {
+      const assignmentTarget = getArgValue(assignmentTarget_).result
+      const { result: stringLiteral, directOutput: stringChanels } = getArgValue(stringLiteral_)
+      const importPath = stringChanels[chanel.stringLiteralImportPath] ?? assertFalse()
+      return GrammarBoundary.withDirectOutput({
+        result: nextNode => nodes.declaration(pos, {
           declarations: [{
             assignmentTarget,
-            expr: nodes.import_(DUMMY_POS, { from: stringLiteral.payload.value }), // FIXME0: I'm reaching into the data of something else.
-            assignmentTargetPos: DUMMY_POS
+            expr: nodes.import_(pos, { from: importPath, fromNode: stringLiteral }),
+            assignmentTargetPos: assignmentTarget.pos
           }],
           nextExpr: nextNode,
           newScope: false,
           export: false,
         }),
+        directOutput: {
+          [chanel.dependency]: importPath,
+        }
       })
-    )
+    })
   %}
 
 block
   -> "{" _ (statement (_ ";"):? _):* "}" {%
-    ([start,, statementEntries, end]) => {
+    boundary(({ pos, nextTokenPos }, [,, statementEntries]) => {
       const statements = statementEntries.map(([statement]) => statement)
+      const endPos = Position.asZeroLength(nextTokenPos) // This isn't the most accurate, as it doesn't handle whitesapce.
       const content = [...statements].reverse().reduce((previousNode, makeNode) => (
         makeNode(previousNode)
-      ), nodes.noop())
-      return nodes.block(range(start, end), { content })
-    }
+      ), nodes.noop(endPos))
+      return nodes.block(pos, { content })
+    })
   %}
 
 blockAndModuleLevelStatement[ALLOW_EXPORT]
   -> ("export" _ $ALLOW_EXPORT):? "let" _ assignmentTarget _ "=" _ expr10 {%
-    ([export_, let_,, assignmentTarget,, ,, expr]) => nextNode => (
-      nodes.declaration(range(let_, expr.pos), {
+    boundary(({ pos }, [export_, let_,, assignmentTarget,, ,, expr]) => nextNode => (
+      nodes.declaration(pos, {
         declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
         nextExpr: nextNode,
         newScope: false,
         export: !!export_,
       })
-    )
+    ))
   %} | "print" _ expr10 {%
-    ([print,, r]) => nextNode => nodes.sequence([
-      nodes.print(range(print, r.pos), { r }),
+    boundary(({ pos }, [,, r]) => nextNode => nodes.sequence(Position.range(pos, nextNode.pos), [
+      nodes.print(pos, { r }),
       nextNode,
-    ])
+    ]))
   %} | "_printType" _ expr10 {%
-    ([print,, r]) => nextNode => nodes.sequence([
-      nodes.printType(range(print, r.pos), { r }),
+    boundary(({ pos }, [,, r]) => nextNode => nodes.sequence(Position.range(pos, nextNode.pos), [
+      nodes.printType(pos, { r }),
       nextNode,
-    ])
+    ]))
   %} | "_debug" _ expr10 {%
-    ([debug,, r]) => nextNode => nodes.sequence([
-      nodes.showDebugOutput(range(debug, r.pos), { r }),
+    boundary(({ pos }, [,, r]) => nextNode => nodes.sequence(Position.range(pos, nextNode.pos), [
+      nodes.showDebugOutput(pos, { r }),
       nextNode,
-    ])
+    ]))
   %} | ("export" _ $ALLOW_EXPORT):? "function" _ userValueIdentifier _ (genericParamDefList _):? argDefList _ (type _):? block {%
-    ([export_, function_,, nameToken,, genericDefListEntry, params,, bodyTypeNodeEntry, body]) => {
-      const [genericParamDefList] = genericDefListEntry ?? [[]]
+    boundary(({ pos }, args) => {
+      const [export_, ,, nameToken,, genericDefListEntry, params_,, bodyTypeNodeEntry, body] = args
+      const posWithoutBody = deepRange(pos.file, args.slice(0, -1))
+      const genericParamDefList = genericDefListEntry?.[0].entries ?? []
+      const { entries: params } = params_
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
-      const fn = nodes.value.function_(DUMMY_POS, { params, body, maybeBodyTypeNode, purity: PURITY.none, genericParamDefList })
-      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(nameToken) })
+      const fn = nodes.value.function_(pos, { params, body, maybeBodyTypeNode, purity: PURITY.none, genericParamDefList, posWithoutBody })
+      const assignmentTarget = nodes.assignmentTarget.bind(DUMMY_POS, { identifier: nameToken.value, maybeTypeConstraintNode: null, identPos: asPos(pos.file, nameToken) })
       return nextNode => nodes.declaration(DUMMY_POS, {
         declarations: [{ assignmentTarget, expr: fn, assignmentTargetPos: DUMMY_POS }],
         nextExpr: nextNode,
         newScope: false,
         export: !!export_,
       })
-    }
+    })  
   %} | ("export" _):? "type" _ "alias" _ %userType _ "=" _ type {%
-    ([export_, ,, ,, nameToken,, ,, typeNode]) => (
+    boundary(({ pos }, [export_, ,, ,, nameToken,, ,, typeNode]) => (
       !!export_
         ? nextNode => { throw new Error('Not implemented') }
-        : nextNode => nodes.typeAlias(DUMMY_POS, { name: nameToken.value, typeNode, definedWithin: nextNode })
-    )
+        : nextNode => nodes.typeAlias(pos, { name: nameToken.value, typeNode, definedWithin: nextNode })
+    ))
   %}
 
 statement
   -> "return" _ expr10 {%
-    ([return_,, expr]) => nextNode => ( // Ignoring nextNode, as nothing can execute after return
-      nodes.return_(range(return_, expr.pos), { value: expr })
-    )
+    boundary(({ pos }, [,, expr]) => nextNode => ( // Ignoring nextNode, as nothing can execute after return
+      nodes.return_(pos, { value: expr })
+    ))
   %} | ("get" | "run") _ expr80 {%
-    ([[callModifier],, invokeExpr]) => nextNode => nodes.sequence([
-      nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-        purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
+    rawBoundary((getArgValue, { pos }, [[callModifier_],, invokeExpr_]) => {
+      const callModifier = getArgValue(callModifier_).result
+      const purity = callModifier.value === 'get' ? PURITY.gets : PURITY.none
+      const { result: invokeExpr, directOutput: invokeExprDirectOutput } =
+        getArgValue(invokeExpr_, { [chanel.callWithPurity]: purity })
+      if (!invokeExprDirectOutput[chanel.isInvokeExpr]) {
+        throw new BadSyntaxError('This expression received a purity annotation, but such annotations should only be used on function calls.', invokeExpr.pos)
+      }
+      return nextNode => nodes.sequence(Position.range(invokeExpr.pos, nextNode.pos), [
         invokeExpr,
-      }),
-      nextNode
-    ])
-  %} | "if" _ expr10 _ block (_ "else" _ "if" _ expr10 _ block):* (_ "else" _ block):? {%
-    ([,, condition,, firstIfSo, elseIfEntries, elseEntry]) => {
-      const [,,, lastIfNot] = elseEntry ?? [,,, nodes.noop()]
-      const firstIfNot = [...elseIfEntries].reverse().reduce((ifNot, [, ,, ,, condition,, ifSo]) => (
-        nodes.branch(DUMMY_POS, { condition, ifSo, ifNot })
-      ), lastIfNot)
-      return nextNode => nodes.sequence([
-        nodes.branch(DUMMY_POS, { condition, ifSo: firstIfSo, ifNot: firstIfNot}),
-        nextNode
+        nextNode,
       ])
-    }
+    })
+  %} | "if" _ expr10 _ block (_ "else" _ "if" _ expr10 _ block):* (_ "else" _ block):? {%
+    boundary(({ pos, nextTokenPos }, [,, condition,, firstIfSo, elseIfEntries, elseEntry]) => {
+      const endPos = Position.asZeroLength(nextTokenPos) // This isn't the most accurate, as it doesn't handle whitesapce.
+      const [,,, lastIfNot] = elseEntry ?? [,,, nodes.noop(endPos)]
+      const firstIfNot = [...elseIfEntries].reverse().reduce((ifNot, args) => {
+        const [, ,, ,, condition,, ifSo] = args
+        const innerPos = deepRange(pos.file, [args.slice(3), ifNot])
+        return nodes.branch(innerPos, { condition, ifSo, ifNot })
+      }, lastIfNot)
+      return nextNode => nodes.sequence(Position.range(pos, endPos), [
+        nodes.branch(pos, { condition, ifSo: firstIfSo, ifNot: firstIfNot}),
+        nextNode,
+      ])
+    })
   %} | block {%
-    ([block]) => nextNode => nodes.sequence([
+    boundary(({ pos }, [block]) => nextNode => nodes.sequence(Position.range(block.pos, nextNode.pos), [
       block,
       nextNode
-    ])
+    ]))
   %} | blockAndModuleLevelStatement[%impossible] {% id %}
 
 moduleLevelStatement
@@ -287,210 +316,254 @@ moduleLevelStatement
 
 expr10
   -> "print" _ expr10 {%
-    ([print, _, r]) => nodes.print(range(print, r.pos), { r })
+    boundary(({ pos }, [, _, r]) => nodes.print(pos, { r }))
   %} | "_printType" _ expr10 {%
-    ([print, _, r]) => nodes.printType(range(print, r.pos), { r })
+    boundary(({ pos }, [, _, r]) => nodes.printType(pos, { r }))
   %} | "_debug" _ expr10 {%
-    ([debug, _, r]) => nodes.showDebugOutput(range(debug, r.pos), { r })
+    boundary(({ pos }, [, _, r]) => nodes.showDebugOutput(pos, { r }))
   %} | ("let" _ assignmentTarget _ "=" _ expr10 _):+ "in" _ expr10 {%
-    ([declarationEntries, ,, expr]) => {
+    boundary(({ pos }, [declarationEntries, ,, expr]) => {
       const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
         { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
       ))
       return nodes.declaration(DUMMY_POS, { declarations, nextExpr: expr, newScope: true })
-    }
+    })
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
-    ([if_,, condition,, ,, ifSo,, ,, ifNot]) => nodes.branch(range(if_, ifNot.pos), { condition, ifSo, ifNot })
+    boundary(({ pos }, [if_,, condition,, ,, ifSo,, ,, ifNot]) => {
+      return nodes.branch(pos, { condition, ifSo, ifNot })
+    })
   %} | (%gets _):? (genericParamDefList _):? argDefList _ (type _):? "=>" _ expr10 {%
-    ([getsEntry, genericParamDefListEntry, argDefList,, bodyTypeNodeEntry, ,, body]) => {
+    boundary(({ pos }, args) => {
+      const [getsEntry, genericParamDefListEntry, argDefList_,, bodyTypeNodeEntry, ,, body] = args
+      const posWithoutBody = deepRange(pos.file, args.slice(0, -1))
+      const { entries: argDefList } = argDefList_
       const purity = getsEntry == null ? PURITY.pure : PURITY.gets
-      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
+      const genericParamDefList = genericParamDefListEntry?.[0].entries ?? []
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
-      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, purity, genericParamDefList })
-    }
+      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, purity, genericParamDefList, posWithoutBody })
+    })
   %} | expr15 {% id %}
 
 expr15
   -> expr20 _ "@" _ expr15 {%
-    ([l,, ,, r]) => nodes.applyTag(range(l.pos, r.pos), { tag: l, content: r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.applyTag(pos, { tag: l, content: r }))
   %} | expr20 {% id %}
 
 expr20
   -> expr20 _ "==" _ expr30 {%
-    ([l,, ,, r]) => nodes.equals(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.equals(pos, { l, r }))
   %} | expr20 _ "!=" _ expr30 {%
-    ([l,, ,, r]) => nodes.notEqual(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.notEqual(pos, { l, r }))
   %} | expr30 {% id %}
 
 expr30
   -> expr30 _ "as" _ type {%
-    ([expr,, ,, typeNode]) => nodes.typeAssertion(DUMMY_POS, { expr, typeNode, operatorAndTypePos: DUMMY_POS })
+    boundary(({ pos }, args) => {
+      const [expr,, as_,, typeNode] = args
+      const operatorAndTypePos = deepRange(pos.file, args.slice(2))
+      return nodes.typeAssertion(pos, { expr, typeNode, operatorAndTypePos })
+    })
   %} | expr40 {% id %}
 
 expr40
   -> expr40 _ "+" _ expr50 {%
-    ([l,, ,, r]) => nodes.add(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.add(pos, { l, r }))
   %} | expr40 _ "-" _ expr50 {%
-    ([l,, ,, r]) => nodes.subtract(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.subtract(pos, { l, r }))
   %} | expr50 {% id %}
 
 expr50
   -> expr50 _ "*" _ expr60 {%
-    ([l,, ,, r]) => nodes.multiply(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.multiply(pos, { l, r }))
   %} | expr60 {% id %}
 
 expr60
   -> expr70 _ "**" _ expr60 {%
-    ([l,, ,, r]) => nodes.power(range(l.pos, r.pos), { l, r })
+    boundary(({ pos }, [l,, ,, r]) => nodes.power(pos, { l, r }))
   %} | expr70 {% id %}
 
 expr70
-  -> (%get | %run) _ expr80 {%
-    ([[callModifier],, invokeExpr]) => nodes.callWithPermissions(range(callModifier, invokeExpr.pos), {
-      purity: callModifier.value === 'get' ? PURITY.gets : PURITY.none,
-      invokeExpr,
+  -> ("get" | "run") _ expr80 {%
+    rawBoundary((getArgValue, { pos }, [[callModifier_],, invokeExpr_]) => {
+      const callModifier = getArgValue(callModifier_).result
+      const purity = callModifier.value === 'get' ? PURITY.gets : PURITY.none
+      const { result: invokeExpr, directOutput: invokeExprDirectOutput } =
+        getArgValue(invokeExpr_, { [chanel.callWithPurity]: purity })
+      if (!invokeExprDirectOutput[chanel.isInvokeExpr]) {
+        throw new BadSyntaxError('This expression received a purity annotation, but such annotations should only be used on function calls.', invokeExpr.pos)
+      }
+      return invokeExpr
     })
   %} | expr80 {% id %}
 
 expr80
   -> expr80 _ (genericParamList _):? "(" _ deliminated[expr10, "," _, ("," _):?] ")" {%
-    ([fnExpr,, genericParamListEntry, ,, args]) => {
+    boundary(({ pos }, [fnExpr,, genericParamListEntry, ,, fnArgs], directInput) => {
+      const callWithPurity = directInput[chanel.callWithPurity] ?? PURITY.pure
       const [genericParams] = genericParamListEntry ?? [[]]
-      return nodes.invoke(DUMMY_POS, { fnExpr, genericParams, args: args.flat() })
-    }
+      return GrammarBoundary.withDirectOutput({
+        result: nodes.invoke(pos, { fnExpr, genericParams, args: fnArgs.flat(), callWithPurity }),
+        directOutput: { [chanel.isInvokeExpr]: true }
+      })
+    })
   %} | expr80 _ "." _ userValueIdentifier {%
-    ([expr,, ,,identifierToken]) => nodes.propertyAccess(range(expr.pos, identifierToken), { l: expr, identifier: identifierToken.value })
+    boundary(({ pos }, [expr,, ,,identifierToken]) => (
+      nodes.propertyAccess(pos, { l: expr, identifier: identifierToken.value })
+    ))
   %} | expr100 {% id %}
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
-      ([,, entries]) => entries.map(([typeNode]) => ({ typeNode, pos: DUMMY_POS }))
+      boundary(({ pos }, [,, entries]) => entries.map(([typeNode]) => ({ typeNode, pos })))
     %}
 
 expr100
   -> %number {%
-    ([token]) => nodes.value.int(asPos(token), { value: BigInt(token.value) })
+    boundary(({ pos }, [token]) => (
+      nodes.value.int(pos, { value: BigInt(token.value) })
+    ))
   %} | %boolean {%
-    ([token]) => nodes.value.boolean(asPos(token), { value: token.value === 'true' })
+    boundary(({ pos }, [token]) => (
+      nodes.value.boolean(pos, { value: token.value === 'true' })
+    ))
   %} | identifier {%
-    ([token]) => token.value[0] === '$' && token.value.length > 1
-      ? nodes.propertyAccess(asPos(token), {
-        l: nodes.stdLibRef(asPos(token)),
+    boundary(({ pos }, [token]) => token.value[0] === '$' && token.value.length > 1
+      ? nodes.propertyAccess(pos, {
+        l: nodes.stdLibRef(asPos(pos.file, token)),
         identifier: token.value.slice(1),
       })
-      : nodes.varLookup(asPos(token), { identifier: token.value })
+      : nodes.varLookup(pos, { identifier: token.value })
+    )
   %} | stringLiteral {%
     id
   %} | "{" _ deliminated[userValueIdentifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
-    ([,, entries, ]) => {
+    boundary(({ pos }, [,, entries, ]) => {
       const content = new Map()
       for (const [identifier, typeNodeEntry,, ,, target] of entries) {
         const [maybeRequiredTypeNode] = typeNodeEntry ?? []
         if (content.has(identifier.value)) {
-          throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(identifier))
+          throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(pos.file, identifier))
         }
         content.set(identifier.value, { maybeRequiredTypeNode, target })
       }
-      return nodes.value.record(DUMMY_POS, { content })
-    }
+      return nodes.value.record(pos, { content })
+    })
   %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 (_ ";"):? _):+ "}" {%
-    ([,, matchValue,, ,, rawMatchArms, ]) => {
+    boundary(({ pos }, [,, matchValue,, ,, rawMatchArms, ]) => {
       const matchArms = rawMatchArms.map(([,, pattern,, ,, body]) => ({ pattern, body }))
-      return nodes.match(DUMMY_POS, { matchValue, matchArms })
-    }
+      return nodes.match(pos, { matchValue, matchArms })
+    })
   %} | "tag" _ (genericParamDefList _):? type {%
-    ([,, genericParamDefList_, typeNode]) => {
-      const [genericParamDefList] = genericParamDefList_ ?? [null]
-      return nodes.value.tag(DUMMY_POS, { genericParamDefList, typeNode })
-    }
+    boundary(({ pos }, [,, genericParamDefList_, typeNode]) => {
+      const genericParamDefList = genericParamDefList_?.[0].entries ?? []
+      return nodes.value.tag(pos, { genericParamDefList, typeNode })
+    })
   %}
 
 stringLiteral
   -> %stringStart %stringContent:? %stringEnd {%
-    ([start, contentEntry, end]) => nodes.value.string(range(start, end), { uninterpretedValue: contentEntry?.value ?? '' })
+    boundary(({ pos }, [start, contentEntry, end]) => {
+      const uninterpretedValue = contentEntry?.value ?? ''
+      const interprettedValue = nodes.value.parseEscapeSequences(uninterpretedValue, pos)
+      return GrammarBoundary.withDirectOutput({
+        result: nodes.value.string(pos, { uninterpretedValue }),
+        directOutput: {
+          [chanel.stringLiteralImportPath]: interprettedValue
+        },
+      })
+    })
   %}
 
 assignmentTarget -> pattern10 {% id %}
 
 pattern10
   -> pattern10 _ "where" _ expr10 {%
-    ([pattern,, ,, constraint]) => nodes.assignmentTarget.valueConstraint(DUMMY_POS, { assignmentTarget: pattern, constraint })
+    boundary(({ pos }, [pattern,, ,, constraint]) => (
+      nodes.assignmentTarget.valueConstraint(pos, { assignmentTarget: pattern, constraint })
+    ))
   %} | pattern20 {% id %}
 
 pattern20
   -> expr20 _ "@" _ pattern20 {%
-    ([tag,, ,, pattern]) => nodes.assignmentTarget.destructureTagged(DUMMY_POS, { tag, innerContent: pattern })
+    boundary(({ pos }, [tag,, ,, pattern]) => (
+      nodes.assignmentTarget.destructureTagged(pos, { tag, innerContent: pattern })
+    ))
   %} | pattern30 {% id %}
 
 pattern30
   -> pattern40 _ ">" _ expr30 {%
-    ([pattern,, ,, constraint]) => { throw new Error('Not Implemented!') } // Can't be done until comparison type classes are done.
+    boundary(({ pos }, [pattern,, ,, constraint]) => { throw new Error('Not Implemented!') }) // Can't be done until comparison type classes are done.
   %} | pattern40 {% id %}
 
 pattern40
   -> userValueIdentifier (_ type):? {%
-    ([identifier, maybeTypeNodeEntry]) => {
+    boundary(({ pos }, [identifier, maybeTypeNodeEntry]) => {
       const [, maybeTypeConstraintNode] = maybeTypeNodeEntry ?? []
-      return nodes.assignmentTarget.bind(DUMMY_POS, { identifier: identifier.value, maybeTypeConstraintNode, identPos: DUMMY_POS })
-    }
+      return nodes.assignmentTarget.bind(pos, { identifier: identifier.value, maybeTypeConstraintNode, identPos: deepRange(pos.file, identifier) })
+    })
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
-    ([leftBracket,, destructureEntries, rightBracket]) => (
-      nodes.assignmentTarget.destructureObj(range(leftBracket, rightBracket), {
+    boundary(({ pos }, [,, destructureEntries]) => (
+      nodes.assignmentTarget.destructureObj(pos, {
         entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
       })
-    )
+    ))
   %}
 
 type
   -> %simpleType {%
-    ([token]) => nodes.type.simpleType(asPos(token), { typeName: token.value })
+    boundary(({ pos }, [token]) => nodes.type.simpleType(pos, { typeName: token.value }))
   %} | %userType {%
-    ([token]) => nodes.type.userTypeLookup(asPos(token), { typeName: token.value })
+    boundary(({ pos }, [token]) => nodes.type.userTypeLookup(pos, { typeName: token.value }))
   %} | "#" ":" _ expr70  {%
-    ([,,, expr]) => nodes.type.evaluateExprType(DUMMY_POS, { expr })
+    boundary(({ pos }, [,,, expr]) => (
+      nodes.type.evaluateExprType(pos, { expr })
+    ))
   %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
-    ([, ,, entries]) => {
+    boundary(({ pos }, [, ,, entries]) => {
       const nameToTypeNode = new Map()
       for (const [identifierToken,, typeNode] of entries) {
         if (nameToTypeNode.has(identifierToken.value)) {
-          throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(identifierToken))
+          throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(pos.file, identifierToken))
         }
         nameToTypeNode.set(identifierToken.value, typeNode)
       }
-      return nodes.type.recordType(DUMMY_POS, { nameToTypeNode })
-    }
+      return nodes.type.recordType(pos, { nameToTypeNode })
+    })
   %} | ("#gets" _ | "#") (genericParamDefList _):? typeList _ "=>" _ type {%
-    ([[callModifierToken], genericParamDefListEntry, paramTypeNodes,, ,, bodyTypeNode]) => {
+    boundary(({ pos }, [[callModifierToken], genericParamDefListEntry, paramTypeNodes,, ,, bodyTypeNode]) => {
       const purity = callModifierToken.value === '#gets' ? PURITY.gets : PURITY.pure
-      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      return nodes.type.functionType(DUMMY_POS, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
-    }
+      const genericParamDefList = genericParamDefListEntry?.[0].entries ?? []
+      return nodes.type.functionType(pos, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
+    })
   %} | "#function" _ (genericParamDefList _):? typeList _ type {%
-    ([,, genericParamDefListEntry, paramTypeNodes,, bodyTypeNode]) => {
+    boundary(({ pos }, [,, genericParamDefListEntry, paramTypeNodes,, bodyTypeNode]) => {
       const purity = PURITY.none
-      const [genericParamDefList] = genericParamDefListEntry ?? [[]]
-      return nodes.type.functionType(DUMMY_POS, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
-    }
+      const genericParamDefList = genericParamDefListEntry?.[0].entries ?? []
+      return nodes.type.functionType(pos, { purity, genericParamDefList, paramTypeNodes, bodyTypeNode })
+    })
   %}
 
   typeList
     -> "(" _ deliminated[type, "," _, ("," _):?] ")" {%
-      ([,, typeNodesEntry]) => typeNodesEntry.map(([typeNode]) => typeNode)
+      boundary(({ pos }, [,, typeNodesEntry]) => typeNodesEntry.map(([typeNode]) => typeNode))
     %}
 
 argDefList
   -> "(" _ deliminated[assignmentTarget, "," _, ("," _):?] ")" {%
-    ([,, entries]) => entries.map(([assignmentTarget]) => assignmentTarget)
+    boundary(({ pos }, [,, entries]) => {
+      return { pos, entries: entries.map(([assignmentTarget]) => assignmentTarget) }
+    })
   %}
 
 genericParamDefList
   -> "<" _ nonEmptyDeliminated[%userType _ (%of _ type _):?, "," _, ("," _):?] ">" {%
-    ([,, entries]) => (
-      entries.map(([identifier,, typeEntry]) => {
+    boundary(({ pos }, [,, rawEntries]) => {
+      const entries = rawEntries.map(([identifier,, typeEntry]) => {
         const [,, constraintNode = nodes.type.simpleType(DUMMY_POS, { typeName: '#unknown' })] = typeEntry ?? []
-        return { identifier: identifier.value, constraintNode, identPos: asPos(identifier) }
+        return { identifier: identifier.value, constraintNode, identPos: asPos(pos.file, identifier) }
       })
-    )
+      return { pos, entries }
+    })
   %}
 
 userValueIdentifier
