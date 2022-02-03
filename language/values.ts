@@ -1,4 +1,5 @@
 import * as Value from './Value'
+import * as Type from './Type'
 import * as types from './types'
 import type { RuntimeScope } from './Runtime'
 import type { AnyAssignmentTargetNode } from '../nodes/variants/AssignmentTargetNode'
@@ -19,6 +20,9 @@ export const createBoolean = (raw: boolean) => Value.create({ raw, type: types.c
 // Used only within the content of a private tag, to hold arbitrary information
 export type InternalValue = Value.Value<types.InternalType, any>
 export const createInternal = (raw: any) => Value.create({ raw, type: types.createInternal() })
+
+export type TypeContainerValue = Value.Value<types.TypeContainerType, undefined>
+export const createTypeContainer = (type: Type.AnyType) => Value.create({ raw: undefined, type })
 
 export type TagValue = Value.Value<types.TagType, undefined>
 export const createTag = (type: types.TagType) => Value.create({ raw: undefined, type })

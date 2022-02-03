@@ -550,6 +550,20 @@ describe('tags', () => {
   })
 })
 
+describe('type declarations', () => {
+  test('Able to create and use custom types', () => {
+    expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3 }').length).toBe(0)
+    expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3, y: 4 }').length).toBe(0)
+    expect(() => customTestRun('let MyType = type #{ x #int }; let value #:MyType = {}'))
+      .toThrow('Can not assign the type "#{}" to an lvalue with the constraint "#{ x #int }". -- value.')
+  })
+
+  test('Custom types have the correct representation', () => {
+    expect(customTestRun('let MyType = type #{ x #int }; _printType { x: 2, y: 3 } as #:MyType')[0])
+      .toBe('#{ x #int }')
+  })
+})
+
 describe('Etc', () => {
   test('Able to have odd spacing', () => {
     expect(customTestRun('').length).toBe(0)

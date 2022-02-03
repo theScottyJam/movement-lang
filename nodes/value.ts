@@ -85,6 +85,29 @@ InstructionNode.register<BooleanPayload, {}>('boolean', {
   typeCheck: (actions, inwardState) => ({ value }) => ({ type: types.createBoolean() }),
 })
 
+interface TypeContainerPayload { typeNode: AnyTypeNode }
+interface TypeContainerTypePayload { type: Type.AnyType }
+export const typeContainer = (pos: Position, payload: TypeContainerPayload) =>
+  InstructionNode.create<TypeContainerPayload>('typeContainer', pos, payload)
+
+InstructionNode.register<TypeContainerPayload, TypeContainerTypePayload>('typeContainer', {
+  exec: (rt, { type }) => ({
+    rtRespState: RtRespState.create(),
+    value: values.createTypeContainer(type),
+  }),
+  typeCheck: (actions, inwardState) => ({ typeNode }) => {
+    const { type: containedType } = actions.checkType(TypeNode, typeNode, inwardState)
+    const type = types.createTypeContainer({
+      containerSentinel: Symbol('type container'),
+      containedType,
+    })
+    return {
+      type,
+      typePayload: { type }
+    }
+  },
+})
+
 // TODO: Use genericParamDefList
 interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode }
 interface TagTypePayload { type: types.TagType }

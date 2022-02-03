@@ -54,6 +54,42 @@ export const createUnknown = () => unknownCategory.create()
 export const isUnknown = (type: Type.AnyConcreteType): type is UnknownType => unknownCategory.typeInCategory(type)
 
 
+// TypeContainer //
+
+interface TypeContainerData {
+  readonly containerSentinel: symbol
+  readonly containedType: Type.AnyType
+}
+
+export type TypeContainerType = Type.ConcreteType<{ name: 'typeContainer', data: TypeContainerData }>
+const typeContainerCategory = Type.createCategory('typeContainer', {
+  repr: (self: TypeContainerType) => `#typeof<type ${Type.repr(self.data.containedType)}>`,
+  compare: (self: TypeContainerType, other: TypeContainerType) => self.data.containerSentinel === other.data.containerSentinel,
+  matchUpGenerics: (self: TypeContainerType, { usingType, onGeneric }) => {
+    // TODO: Not sure if I'm doing this right
+    Type.matchUpGenerics(self.data.containedType, { usingType: usingType.data.containedType, onGeneric })
+  },
+  fillGenericParams: (self: TypeContainerType, { getReplacement }): TypeContainerType => {
+    // TODO: Not sure if I'm doing this right
+    return createTypeContainer({
+      containerSentinel: self.data.containerSentinel,
+      containedType: Type.fillGenericParams(self.data.containedType, { getReplacement }),
+    })
+  },
+  // TODO: It should be possible to use template parameters in the type definition
+  // (so I shouldn't need to use getConstrainingType)
+  createDescendentMatchingType: (self: TypeContainerType) => Type.getConstrainingType(self.data.containedType),
+})
+export const createTypeContainer = ({ containedType, containerSentinel }: TypeContainerData): TypeContainerType => (
+  typeContainerCategory.create({
+    data: {
+      containedType,
+      containerSentinel,
+    },
+  })
+)
+
+
 // Tag //
 
 interface TagTypeData {

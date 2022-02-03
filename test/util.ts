@@ -18,8 +18,8 @@ export const customTestRun = (text, opts: CustomTestRunOpts = {}) => {
     )
     const snippet = moduleTextWithErr === internalFile
       ? '<internal file>'
-      : moduleTextWithErr.slice(pos.offset, pos.offset + pos.length).replace(/\n/g, '\\n') + '.'
-    const newErr = new Error(message + ' -- ' + snippet + '.') // Add period, so errors have an end-token to match against.
+      : moduleTextWithErr.slice(pos.offset, pos.offset + pos.length).replace(/\n/g, '\\n') + '.' // Add period, so errors have an end-token to match against.
+    const newErr = new Error(message + ' -- ' + snippet)
     newErr.stack = err.stack
     throw newErr
   }

@@ -458,6 +458,10 @@ expr100
       const genericParamDefList = genericParamDefList_?.[0].entries ?? []
       return nodes.value.tag(pos, { genericParamDefList, typeNode })
     })
+  %} | "type" _ type {%
+    boundary(({ pos }, [,, typeNode]) => {
+      return nodes.value.typeContainer(pos, { typeNode })
+    })
   %}
 
 stringLiteral
