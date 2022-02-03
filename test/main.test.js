@@ -564,39 +564,6 @@ describe('type declarations', () => {
   })
 })
 
-describe('Etc', () => {
-  test('Able to have odd spacing', () => {
-    expect(customTestRun('').length).toBe(0)
-    expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
-    expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
-    expect(customTestRun('begin{print 2 ; print 3}')[1].raw).toBe(3n)
-    expect(customTestRun(' let x = 2 begin { print 0 print x } ')[1].raw).toBe(2n)
-    expect(customTestRun(' let x = 2 ; begin { print 0 print x } ')[1].raw).toBe(2n)
-    expect(customTestRun(' print 2 ')[0].raw).toBe(2n)
-    expect(customTestRun('').length).toBe(0)
-    expect(customTestRun(' ').length).toBe(0)
-    expect(customTestRun(" import other from './other' print other.x ", {
-      modules: { 'other': 'export let x = 2' }
-    })[0].raw).toBe(2n)
-    expect(customTestRun(" import other from './other' ; print other.x ", {
-      modules: { 'other': 'export let x = 2' }
-    })[0].raw).toBe(2n)
-    expect(customTestRun(" import other from './other' begin { print other.x } ", {
-      modules: { 'other': 'export let x = 2' }
-    })[0].raw).toBe(2n)
-    expect(customTestRun(" import other from './other' let y = other.x + 1 begin { print y } ", {
-      modules: { 'other': 'export let x = 2' }
-    })[0].raw).toBe(3n)
-    expect(customTestRun(" import other from './other' ", {
-      modules: { 'other': 'print 2' }
-    })[0].raw).toBe(2n)
-  })
-
-  test('Able to use variable names with keywords', () => {
-    expect(customTestRun('let printX = 2; let inX = 3; let trueX = 4; print printX + inX + trueX')[0].raw).toBe(9n)
-  })
-})
-
 describe('Generics', () => {
   test('Basic generic functionality', () => {
     expect(customTestRun('let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 3)')[0].raw).toBe(2n)
@@ -691,9 +658,48 @@ describe('Generics', () => {
   // Eventually: Usage with tags.
 })
 
+describe('Etc', () => {
+  test('Able to have odd spacing', () => {
+    expect(customTestRun('').length).toBe(0)
+    expect(customTestRun(' begin { print 2 } ')[0].raw).toBe(2n)
+    expect(customTestRun('begin{print 2;print 3}')[1].raw).toBe(3n)
+    expect(customTestRun('begin{print 2 ; print 3}')[1].raw).toBe(3n)
+    expect(customTestRun(' let x = 2 begin { print 0 print x } ')[1].raw).toBe(2n)
+    expect(customTestRun(' let x = 2 ; begin { print 0 print x } ')[1].raw).toBe(2n)
+    expect(customTestRun(' print 2 ')[0].raw).toBe(2n)
+    expect(customTestRun('').length).toBe(0)
+    expect(customTestRun(' ').length).toBe(0)
+    expect(customTestRun(" import other from './other' print other.x ", {
+      modules: { 'other': 'export let x = 2' }
+    })[0].raw).toBe(2n)
+    expect(customTestRun(" import other from './other' ; print other.x ", {
+      modules: { 'other': 'export let x = 2' }
+    })[0].raw).toBe(2n)
+    expect(customTestRun(" import other from './other' begin { print other.x } ", {
+      modules: { 'other': 'export let x = 2' }
+    })[0].raw).toBe(2n)
+    expect(customTestRun(" import other from './other' let y = other.x + 1 begin { print y } ", {
+      modules: { 'other': 'export let x = 2' }
+    })[0].raw).toBe(3n)
+    expect(customTestRun(" import other from './other' ", {
+      modules: { 'other': 'print 2' }
+    })[0].raw).toBe(2n)
+  })
+
+  test('Able to use variable names with keywords', () => {
+    expect(customTestRun('let printX = 2; let inX = 3; let trueX = 4; print printX + inX + trueX')[0].raw).toBe(9n)
+  })
+
+  test('Unable to access invalid built-in properties', () => {
+    expect(() => customTestRun('print $thisIsNotARealBuiltInValue'))
+      .toThrow('Failed to find the identifier "thisIsNotARealBuiltInValue" on the record of type') // first half of error
+    expect(() => customTestRun('print $thisIsNotARealBuiltInValue'))
+      .toThrow(' -- $thisIsNotARealBuiltInValue.') // last half of error
+  })
+})
+
 /* OTHER TESTS
 # Can't access type definitions that were defined in a scope. (e.g. don't do { type alias #x = #int } let y #x = 2)
-# Invalid built-in types should throw errors (e.g. #something)
 # Make sure to test the different assignmentTarget nodes within function parameters and pattern matching.
 # Test having a tagged value with a large data type, get assigned to a smaller destructure, and vice-versa (possibly already tested)
 # All function parameters must have a declared type (this error has changed, but I should still test it)
