@@ -132,6 +132,24 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   },
 })
 
+interface SymbolTypePayload { type: types.SymbolType }
+export const symbol = (pos: Position) =>
+  InstructionNode.create<{}>('symbol', pos, {})
+
+InstructionNode.register<{}, SymbolTypePayload>('symbol', {
+  exec: (rt, { type }) => ({
+    rtRespState: RtRespState.create(),
+    value: values.createSymbol(type.data),
+  }),
+  typeCheck: (actions, inwardState) => () => {
+    const type = types.createSymbol()
+    return {
+      type,
+      typePayload: { type }
+    }
+  },
+})
+
 interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null }
 interface RecordPayload { content: Map<string, RecordValueDescription> }
 interface RecordTypePayload { finalType: types.RecordType }

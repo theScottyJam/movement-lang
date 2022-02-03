@@ -17,6 +17,9 @@ export const createString = (raw: string) => Value.create({ raw, type: types.cre
 export type BooleanValue = Value.Value<types.BooleanType, boolean>
 export const createBoolean = (raw: boolean) => Value.create({ raw, type: types.createBoolean() })
 
+export type SymbolValue = Value.Value<types.SymbolType, symbol>
+export const createSymbol = (raw: symbol) => Value.create({ raw, type: types.createSymbol(raw) })
+
 // Used only within the content of a private tag, to hold arbitrary information
 export type InternalValue = Value.Value<types.InternalType, any>
 export const createInternal = (raw: any) => Value.create({ raw, type: types.createInternal() })

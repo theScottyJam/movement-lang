@@ -26,6 +26,13 @@ const booleanCategory = Type.createCategory('boolean', {
 })
 export const createBoolean = () => booleanCategory.create()
 
+export type SymbolType = Type.ConcreteType<{ name: 'symbol', data: symbol }>
+const SymbolCategory = Type.createCategory('symbol', {
+  repr: (self: SymbolType) => '#typeof(symbol)',
+  compare: (self: SymbolType, other: SymbolType) => self.data === other.data,
+})
+export const createSymbol = (rawSymbol: symbol = Symbol()) => SymbolCategory.create({ data: rawSymbol })
+
 // Used only within the content of a private tag, to hold arbitrary information
 export type InternalType = Type.ConcreteType<{ name: 'internal', data: undefined }>
 const internalCategory = Type.createCategory('internal', {
@@ -63,7 +70,7 @@ interface TypeContainerData {
 
 export type TypeContainerType = Type.ConcreteType<{ name: 'typeContainer', data: TypeContainerData }>
 const typeContainerCategory = Type.createCategory('typeContainer', {
-  repr: (self: TypeContainerType) => `#typeof<type ${Type.repr(self.data.containedType)}>`,
+  repr: (self: TypeContainerType) => `#typeof(type ${Type.repr(self.data.containedType)})`,
   compare: (self: TypeContainerType, other: TypeContainerType) => self.data.containerSentinel === other.data.containerSentinel,
   matchUpGenerics: (self: TypeContainerType, { usingType, onGeneric }) => {
     // TODO: Not sure if I'm doing this right
@@ -99,7 +106,7 @@ interface TagTypeData {
 
 export type TagType = Type.ConcreteType<{ name: 'tag', data: TagTypeData }>
 const tagCategory = Type.createCategory('tag', {
-  repr: (self: TagType) => `#typeof<tag ${Type.repr(self.data.boxedType)}>`,
+  repr: (self: TagType) => `#typeof(tag ${Type.repr(self.data.boxedType)})`,
   compare: (self: TagType, other: TagType) => self.data.tagSentinel === other.data.tagSentinel,
   matchUpGenerics: (self: TagType, { usingType, onGeneric }) => {
     Type.matchUpGenerics(self.data.boxedType, { usingType: usingType.data.boxedType, onGeneric })

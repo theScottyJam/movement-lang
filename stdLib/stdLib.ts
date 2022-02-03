@@ -1,4 +1,3 @@
-import type { Token } from 'moo'
 import * as Position from '../language/Position'
 import * as Type from '../language/Type'
 import * as types from '../language/types'

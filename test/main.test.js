@@ -511,7 +511,7 @@ describe('Imports', () => {
   })
 })
 
-describe('tags', () => {
+describe('Tags', () => {
   test('Basic tag functionality', () => {
     expect(customTestRun('let id = tag #int; let myId = id@ 2; let id@ myId2 = myId; print myId2')[0].raw).toBe(2n)
     expect(customTestRun('let myTag = tag #{ x #int }; let boxed = myTag@ { x: 2 }; let myTag@ { x: value } = boxed; print value')[0].raw).toBe(2n)
@@ -524,7 +524,7 @@ describe('tags', () => {
 
   test('Each tag has a unique type', () => {
     expect(() => customTestRun('let a = tag #int; let b = tag #int; let result = if true then a else b'))
-      .toThrow('The following "if true" case of this condition has the type "#typeof<tag #int>", which is incompatible with the "if not" case\'s type, "#typeof<tag #int>". -- a.')
+      .toThrow('The following "if true" case of this condition has the type "#typeof(tag #int)", which is incompatible with the "if not" case\'s type, "#typeof(tag #int)". -- a.')
   })
 
   test('Tags in pattern matching', () => {
@@ -548,9 +548,34 @@ describe('tags', () => {
     expect(() => customTestRun('let a = tag #int; let boxed = a@ 2; type alias #BadType = #:boxed'))
       .toThrow('The provided value can not be used to make a descendent-matching type. -- #:boxed.')
   })
+
+  test("Can not assign a tag to a value who's type references a different tag", () => {
+    expect(() => customTestRun('let tag1 = tag #int; let tag2 = tag #int; let tag3 #typeof(tag1) = tag2'))
+      .toThrow('Can not assign the type "#typeof(tag #int)" to an lvalue with the constraint "#typeof(tag #int)". -- tag3.')
+  })
+
+  test("Able to assign a tag to a value who's type references the same tag", () => {
+    expect(customTestRun('let tag1 = tag #int; let tag2 #typeof(tag1) = tag1; _printType tag2')[0])
+      .toBe('#typeof(tag #int)')
+  })
+
+  // A tagged expression will always return the same tag each time it's executed.
+  // Without this, it's impossible to follow the type of a particular tag passed function returns and what-not.
+  test('A tag expression always returns the same tag value', () => {
+    expect(customTestRun(`
+      begin {
+        let fn = () => tag #int
+        let myTag = fn()
+        let myTag2 = fn()
+        let obj = myTag@ 2
+        let myTag2@ result = obj
+        print result
+      }
+    `)[0].raw).toBe(2n)
+  })
 })
 
-describe('type declarations', () => {
+describe('Type declarations', () => {
   test('Able to create and use custom types', () => {
     expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3 }').length).toBe(0)
     expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3, y: 4 }').length).toBe(0)
@@ -561,6 +586,42 @@ describe('type declarations', () => {
   test('Custom types have the correct representation', () => {
     expect(customTestRun('let MyType = type #{ x #int }; _printType { x: 2, y: 3 } as #:MyType')[0])
       .toBe('#{ x #int }')
+  })
+})
+
+describe('Typeof', () => {
+  test('Able to correctly get the type of a value', () => {
+    expect(customTestRun('let obj1 = { x: 2, y: 3 }; let obj2 = { x: 4 }; let obj3 #typeof(obj2) = obj1; _printType obj3')[0])
+      .toBe('#{ x #int }')
+    expect(() => customTestRun('let obj1 = { x: 2, y: 3 }; let obj2 = { x: 4 }; let obj3 #typeof(obj1) = obj2; _printType obj1'))
+      .toThrow('Can not assign the type "#{ x #int }" to an lvalue with the constraint "#{ x #int, y #int }". -- obj3.')
+  })
+})
+
+describe('Symbols', () => {
+  test("Can not assign a symbol to a value who's type references a different symbol", () => {
+    expect(() => customTestRun('let symb1 = symbol; let symb2 = symbol; let symb3 #typeof(symb1) = symb2'))
+      .toThrow('Can not assign the type "#typeof(symbol)" to an lvalue with the constraint "#typeof(symbol)". -- symb3.')
+  })
+
+  test("Able to assign a symbol to a value who's type references the same symbol", () => {
+    expect(customTestRun('let symb1 = symbol; let symb2 #typeof(symb1) = symb1; _printType symb2')[0])
+      .toBe('#typeof(symbol)')
+  })
+
+  // A symbol expression will always return the same symbol each time it's executed.
+  // Without this, it's impossible to follow the type of a particular symbol passed function returns and what-not.
+  // JavaScript symbols don't have this behavior, for example, and that's why typescript
+  // has both a "symbol" and "unique symbol" type, and that "unique symbol" quickly degrades to a plain symbol.
+  test('A symbol expression always returns the same symbol value', () => {
+    expect(customTestRun(`
+      begin {
+        let fn = () => symbol
+        let symb1 = fn()
+        let symb2 = fn()
+        let value #typeof(symb1) = symb2
+      }
+    `).length).toBe(0)
   })
 })
 

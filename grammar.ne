@@ -110,6 +110,7 @@
           'when': 'when',
           'where': 'where',
           'tag': 'tag',
+          'symbol': 'symbol',
           'variant': 'variant',
           'export': 'export',
           'import': 'import',
@@ -129,6 +130,7 @@
         type: moo.keywords({
           '#gets': '#gets',
           '#function': '#function',
+          '#typeof': '#typeof',
         })
       },
       'userType': /\#[A-Z][a-zA-Z0-9]*/,
@@ -458,6 +460,10 @@ expr100
       const genericParamDefList = genericParamDefList_?.[0].entries ?? []
       return nodes.value.tag(pos, { genericParamDefList, typeNode })
     })
+  %} | "symbol" {%
+    boundary(({ pos }) => {
+      return nodes.value.symbol(pos)
+    })
   %} | "type" _ type {%
     boundary(({ pos }, [,, typeNode]) => {
       return nodes.value.typeContainer(pos, { typeNode })
@@ -520,7 +526,11 @@ type
     boundary(({ pos }, [token]) => nodes.type.userTypeLookup(pos, { typeName: token.value }))
   %} | "#" ":" _ expr70  {%
     boundary(({ pos }, [,,, expr]) => (
-      nodes.type.evaluateExprType(pos, { expr })
+      nodes.type.descendentType(pos, { expr })
+    ))
+  %} | "#typeof" _ "(" _ expr10 _ ")"  {%
+    boundary(({ pos }, [,, ,, expr]) => (
+      nodes.type.typeOfExpr(pos, { expr })
     ))
   %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
     boundary(({ pos }, [, ,, entries]) => {

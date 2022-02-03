@@ -54,17 +54,31 @@ TypeNode.register<UserTypeLookupPayload>('userTypeLookup', {
   },
 })
 
-interface EvaluateExprTypePayload { expr: AnyInstructionNode }
-export const evaluateExprType = (pos: Position, payload: EvaluateExprTypePayload) =>
-  TypeNode.create<EvaluateExprTypePayload>('evaluateExprType', pos, payload)
+interface DescendentTypePayload { expr: AnyInstructionNode }
+export const descendentType = (pos: Position, payload: DescendentTypePayload) =>
+  TypeNode.create<DescendentTypePayload>('descendentType', pos, payload)
 
-TypeNode.register<EvaluateExprTypePayload>('evaluateExprType', {
+TypeNode.register<DescendentTypePayload>('descendentType', {
   typeCheck: (actions, inwardState) => ({ pos, expr }) => {
     const type = actions.noExecZone(() => {
       return pipe(
         actions.checkType(InstructionNode, expr, inwardState).type,
         $=> Type.getTypeMatchingDescendants($, pos)
       )
+    })
+
+    return { type }
+  },
+})
+
+interface TypeOfExprPayload { expr: AnyInstructionNode }
+export const typeOfExpr = (pos: Position, payload: TypeOfExprPayload) =>
+  TypeNode.create<TypeOfExprPayload>('typeOfExpr', pos, payload)
+
+TypeNode.register<TypeOfExprPayload>('typeOfExpr', {
+  typeCheck: (actions, inwardState) => ({ pos, expr }) => {
+    const type = actions.noExecZone(() => {
+      return actions.checkType(InstructionNode, expr, inwardState).type
     })
 
     return { type }
