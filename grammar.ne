@@ -35,6 +35,8 @@
     dependency: Symbol('dependency chanel'),
     callWithPurity: Symbol('call with purity'),
     isInvokeExpr: Symbol('is invoke expression'),
+    bindName: Symbol('bind name'),
+    assignmentTargetName: Symbol('assignment target name'),
   }
 
   const assertFalse = () => { throw new Error('Assertion failed') }
@@ -226,14 +228,20 @@ block
 
 blockAndModuleLevelStatement[ALLOW_EXPORT]
   -> ("export" _ $ALLOW_EXPORT):? "let" _ assignmentTarget _ "=" _ expr10 {%
-    boundary(({ pos }, [export_, let_,, assignmentTarget,, ,, expr]) => nextNode => (
-      nodes.declaration(pos, {
-        declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
-        nextExpr: nextNode,
-        newScope: false,
-        export: !!export_,
-      })
-    ))
+    rawBoundary((getArgValue, { pos }, [exportEntry, ,, assignmentTarget_,, ,, expr_]) => {
+      const { result: assignmentTarget, directOutput: assignmentTargetDirectOutput } = getArgValue(assignmentTarget_)
+      const expr = getArgValue(expr_, {
+        [chanel.assignmentTargetName]: assignmentTargetDirectOutput[chanel.bindName] ?? null
+      }).result
+      return nextNode => (
+        nodes.declaration(pos, {
+          declarations: [{ assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }],
+          nextExpr: nextNode,
+          newScope: false,
+          export: !!exportEntry,
+        })
+      )
+    })
   %} | "print" _ expr10 {%
     boundary(({ pos }, [,, r]) => nextNode => nodes.sequence(Position.range(pos, nextNode.pos), [
       nodes.print(pos, { r }),
@@ -324,11 +332,16 @@ expr10
   %} | "_debug" _ expr10 {%
     boundary(({ pos }, [, _, r]) => nodes.showDebugOutput(pos, { r }))
   %} | ("let" _ assignmentTarget _ "=" _ expr10 _):+ "in" _ expr10 {%
-    boundary(({ pos }, [declarationEntries, ,, expr]) => {
-      const declarations = declarationEntries.map(([,, assignmentTarget,, ,, expr]) => (
-        { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
-      ))
-      return nodes.declaration(DUMMY_POS, { declarations, nextExpr: expr, newScope: true })
+    rawBoundary((getArgValue, { pos }, [declarationEntries, ,, endExpr_]) => {
+      const endExpr = getArgValue(endExpr_).result
+      const declarations = declarationEntries.map(([,, assignmentTarget_,, ,, expr_]) => {
+        const { result: assignmentTarget, directOutput: assignmentTargetDirectOutput } = getArgValue(assignmentTarget_)
+        const expr = getArgValue(expr_, {
+          [chanel.assignmentTargetName]: assignmentTargetDirectOutput[chanel.bindName] ?? null,
+        }).result
+        return { assignmentTarget, expr, assignmentTargetPos: DUMMY_POS }
+      })
+      return nodes.declaration(DUMMY_POS, { declarations, nextExpr: endExpr, newScope: true })
     })
   %} | "if" _ expr10 _ "then" _ expr10 _ "else" _ expr10 {%
     boundary(({ pos }, [if_,, condition,, ,, ifSo,, ,, ifNot]) => {
@@ -360,9 +373,13 @@ expr20
 
 expr30
   -> expr30 _ "as" _ type {%
-    boundary(({ pos }, args) => {
-      const [expr,, as_,, typeNode] = args
-      const operatorAndTypePos = deepRange(pos.file, args.slice(2))
+    rawBoundary((getArgValue, { pos }, [expr_,, asToken_,, typeNode_], directInput) => {
+      const expr = getArgValue(expr_, {
+        [chanel.assignmentTargetName]: directInput[chanel.assignmentTargetName] ?? null,
+      }).result
+      const asToken = getArgValue(asToken_).result
+      const typeNode = getArgValue(typeNode_).result
+      const operatorAndTypePos = deepRange(pos.file, [asToken, typeNode])
       return nodes.typeAssertion(pos, { expr, typeNode, operatorAndTypePos })
     })
   %} | expr40 {% id %}
@@ -456,17 +473,28 @@ expr100
       return nodes.match(pos, { matchValue, matchArms })
     })
   %} | "tag" _ (genericParamDefList _):? type {%
-    boundary(({ pos }, [,, genericParamDefList_, typeNode]) => {
+    boundary(({ pos }, [,, genericParamDefList_, typeNode], directInput) => {
       const genericParamDefList = genericParamDefList_?.[0].entries ?? []
-      return nodes.value.tag(pos, { genericParamDefList, typeNode })
+      return nodes.value.tag(pos, {
+        genericParamDefList,
+        typeNode,
+        name: directInput[chanel.assignmentTargetName] ?? null,
+      })
     })
   %} | "symbol" {%
-    boundary(({ pos }) => {
-      return nodes.value.symbol(pos)
+    boundary(({ pos }, [], directInput) => {
+      return nodes.value.symbol(pos, {
+        name: directInput[chanel.assignmentTargetName] ?? null,
+      })
     })
   %} | "type" _ type {%
-    boundary(({ pos }, [,, typeNode]) => {
-      return nodes.value.typeContainer(pos, { typeNode })
+    boundary(({ pos }, [,, typeNode], directInput) => {
+      return nodes.value.typeContainer(pos, {
+        typeNode,
+        name: directInput[chanel.assignmentTargetName]
+          ? '#:' + directInput[chanel.assignmentTargetName]
+          : null,
+      })
     })
   %}
 
@@ -488,9 +516,14 @@ assignmentTarget -> pattern10 {% id %}
 
 pattern10
   -> pattern10 _ "where" _ expr10 {%
-    boundary(({ pos }, [pattern,, ,, constraint]) => (
-      nodes.assignmentTarget.valueConstraint(pos, { assignmentTarget: pattern, constraint })
-    ))
+    rawBoundary((getArgValue, { pos }, [pattern_,, ,, constraint_]) => {
+      const { result: pattern, directOutput: patternDirectOutput } = getArgValue(pattern_)
+      const constraint = getArgValue(constraint_).result
+      return GrammarBoundary.withDirectOutput({
+        result: nodes.assignmentTarget.valueConstraint(pos, { assignmentTarget: pattern, constraint }),
+        directOutput: { [chanel.bindName]: patternDirectOutput[chanel.bindName] ?? null }
+      })
+    })
   %} | pattern20 {% id %}
 
 pattern20
@@ -502,14 +535,21 @@ pattern20
 
 pattern30
   -> pattern40 _ ">" _ expr30 {%
-    boundary(({ pos }, [pattern,, ,, constraint]) => { throw new Error('Not Implemented!') }) // Can't be done until comparison type classes are done.
+    boundary(({ pos }, [pattern,, ,, constraint]) => { throw new Error('Not Implemented!') }) // Can't be done until comparison type classes are done. (make sure to pass chanel.bindName down)
   %} | pattern40 {% id %}
 
 pattern40
   -> userValueIdentifier (_ type):? {%
     boundary(({ pos }, [identifier, maybeTypeNodeEntry]) => {
       const [, maybeTypeConstraintNode] = maybeTypeNodeEntry ?? []
-      return nodes.assignmentTarget.bind(pos, { identifier: identifier.value, maybeTypeConstraintNode, identPos: deepRange(pos.file, identifier) })
+      return GrammarBoundary.withDirectOutput({
+        result: nodes.assignmentTarget.bind(pos, {
+          identifier: identifier.value,
+          maybeTypeConstraintNode,
+          identPos: deepRange(pos.file, identifier),
+        }),
+        directOutput: { [chanel.bindName]: identifier.value },
+      })
     })
   %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
     boundary(({ pos }, [,, destructureEntries]) => (

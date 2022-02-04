@@ -85,7 +85,7 @@ InstructionNode.register<BooleanPayload, {}>('boolean', {
   typeCheck: (actions, inwardState) => ({ value }) => ({ type: types.createBoolean() }),
 })
 
-interface TypeContainerPayload { typeNode: AnyTypeNode }
+interface TypeContainerPayload { name?: string | null, typeNode: AnyTypeNode }
 interface TypeContainerTypePayload { type: Type.AnyType }
 export const typeContainer = (pos: Position, payload: TypeContainerPayload) =>
   InstructionNode.create<TypeContainerPayload>('typeContainer', pos, payload)
@@ -95,11 +95,13 @@ InstructionNode.register<TypeContainerPayload, TypeContainerTypePayload>('typeCo
     rtRespState: RtRespState.create(),
     value: values.createTypeContainer(type),
   }),
-  typeCheck: (actions, inwardState) => ({ typeNode }) => {
+  typeCheck: (actions, inwardState) => ({ name, typeNode }) => {
     const { type: containedType } = actions.checkType(TypeNode, typeNode, inwardState)
     const type = types.createTypeContainer({
       containerSentinel: Symbol('type container'),
-      containedType,
+      containedType: name
+        ? Type.withName(containedType, name)
+        : containedType,
     })
     return {
       type,
@@ -109,7 +111,7 @@ InstructionNode.register<TypeContainerPayload, TypeContainerTypePayload>('typeCo
 })
 
 // TODO: Use genericParamDefList
-interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode }
+interface TagPayload { genericParamDefList: GenericParamDefinition[], typeNode: AnyTypeNode, name?: string | null }
 interface TagTypePayload { type: types.TagType }
 export const tag = (pos: Position, payload: TagPayload) =>
   InstructionNode.create<TagPayload>('tag', pos, payload)
@@ -119,11 +121,12 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
     rtRespState: RtRespState.create(),
     value: values.createTag(type),
   }),
-  typeCheck: (actions, inwardState) => ({ typeNode }) => {
+  typeCheck: (actions, inwardState) => ({ name, typeNode }) => {
     const { type: boxedType } = actions.checkType(TypeNode, typeNode, inwardState)
     const type = types.createTag({
       tagSentinel: Symbol('tag'),
       boxedType,
+      name,
     })
     return {
       type,
@@ -132,17 +135,18 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   },
 })
 
+interface RecordPayload { name: string | null }
 interface SymbolTypePayload { type: types.SymbolType }
-export const symbol = (pos: Position) =>
-  InstructionNode.create<{}>('symbol', pos, {})
+export const symbol = (pos: Position, payload: RecordPayload) =>
+  InstructionNode.create<RecordPayload>('symbol', pos, payload)
 
-InstructionNode.register<{}, SymbolTypePayload>('symbol', {
+InstructionNode.register<RecordPayload, SymbolTypePayload>('symbol', {
   exec: (rt, { type }) => ({
     rtRespState: RtRespState.create(),
-    value: values.createSymbol(type.data),
+    value: values.createSymbol(type.data.value),
   }),
-  typeCheck: (actions, inwardState) => () => {
-    const type = types.createSymbol()
+  typeCheck: (actions, inwardState) => ({ name }) => {
+    const type = types.createSymbol({ name })
     return {
       type,
       typePayload: { type }

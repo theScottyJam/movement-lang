@@ -26,12 +26,15 @@ const booleanCategory = Type.createCategory('boolean', {
 })
 export const createBoolean = () => booleanCategory.create()
 
-export type SymbolType = Type.ConcreteType<{ name: 'symbol', data: symbol }>
+interface SymbolData { name?: string | null, value: symbol }
+export type SymbolType = Type.ConcreteType<{ name: 'symbol', data: SymbolData }>
 const SymbolCategory = Type.createCategory('symbol', {
-  repr: (self: SymbolType) => '#typeof(symbol)',
-  compare: (self: SymbolType, other: SymbolType) => self.data === other.data,
+  repr: (self: SymbolType) => `#typeof(symbol${self.data.name ? ' ' + self.data.name : ''})`,
+  compare: (self: SymbolType, other: SymbolType) => self.data.value === other.data.value,
 })
-export const createSymbol = (rawSymbol: symbol = Symbol()) => SymbolCategory.create({ data: rawSymbol })
+export const createSymbol = ({ name, value }: Partial<SymbolData>) => (
+  SymbolCategory.create({ data: { name: name ?? null, value: value ?? Symbol() } })
+)
 
 // Used only within the content of a private tag, to hold arbitrary information
 export type InternalType = Type.ConcreteType<{ name: 'internal', data: undefined }>
@@ -87,13 +90,8 @@ const typeContainerCategory = Type.createCategory('typeContainer', {
   // (so I shouldn't need to use getConstrainingType)
   createDescendentMatchingType: (self: TypeContainerType) => Type.getConstrainingType(self.data.containedType),
 })
-export const createTypeContainer = ({ containedType, containerSentinel }: TypeContainerData): TypeContainerType => (
-  typeContainerCategory.create({
-    data: {
-      containedType,
-      containerSentinel,
-    },
-  })
+export const createTypeContainer = (data: TypeContainerData): TypeContainerType => (
+  typeContainerCategory.create({ data })
 )
 
 
@@ -102,11 +100,12 @@ export const createTypeContainer = ({ containedType, containerSentinel }: TypeCo
 interface TagTypeData {
   readonly tagSentinel: symbol
   readonly boxedType: Type.AnyType
+  readonly name?: string | null
 }
 
 export type TagType = Type.ConcreteType<{ name: 'tag', data: TagTypeData }>
 const tagCategory = Type.createCategory('tag', {
-  repr: (self: TagType) => `#typeof(tag ${Type.repr(self.data.boxedType)})`,
+  repr: (self: TagType) => `#typeof(tag ${self.data.name ? self.data.name + ' ' : ''}${Type.repr(self.data.boxedType)})`,
   compare: (self: TagType, other: TagType) => self.data.tagSentinel === other.data.tagSentinel,
   matchUpGenerics: (self: TagType, { usingType, onGeneric }) => {
     Type.matchUpGenerics(self.data.boxedType, { usingType: usingType.data.boxedType, onGeneric })
@@ -119,12 +118,7 @@ const tagCategory = Type.createCategory('tag', {
   },
   createDescendentMatchingType: (self: TagType) => createTagged({ tag: self })
 })
-export const createTag = ({ boxedType, tagSentinel }: TagTypeData): TagType => tagCategory.create({
-  data: {
-    boxedType,
-    tagSentinel,
-  },
-})
+export const createTag = (data: TagTypeData): TagType => tagCategory.create({ data })
 
 
 // Tagged //

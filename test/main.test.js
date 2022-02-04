@@ -524,7 +524,7 @@ describe('Tags', () => {
 
   test('Each tag has a unique type', () => {
     expect(() => customTestRun('let a = tag #int; let b = tag #int; let result = if true then a else b'))
-      .toThrow('The following "if true" case of this condition has the type "#typeof(tag #int)", which is incompatible with the "if not" case\'s type, "#typeof(tag #int)". -- a.')
+      .toThrow('The following "if true" case of this condition has the type "#typeof(tag a #int)", which is incompatible with the "if not" case\'s type, "#typeof(tag b #int)". -- a.')
   })
 
   test('Tags in pattern matching', () => {
@@ -551,11 +551,21 @@ describe('Tags', () => {
 
   test("Can not assign a tag to a value who's type references a different tag", () => {
     expect(() => customTestRun('let tag1 = tag #int; let tag2 = tag #int; let tag3 #typeof(tag1) = tag2'))
-      .toThrow('Can not assign the type "#typeof(tag #int)" to an lvalue with the constraint "#typeof(tag #int)". -- tag3.')
+      .toThrow('Can not assign the type "#typeof(tag tag2 #int)" to an lvalue with the constraint "#typeof(tag tag1 #int)". -- tag3.')
   })
 
   test("Able to assign a tag to a value who's type references the same tag", () => {
     expect(customTestRun('let tag1 = tag #int; let tag2 #typeof(tag1) = tag1; _printType tag2')[0])
+      .toBe('#typeof(tag tag1 #int)')
+  })
+
+  test("It can derive a type name from an assignment", () => {
+    expect(customTestRun('let myTag = tag #int; _printType myTag')[0])
+      .toBe('#typeof(tag myTag #int)')
+  })
+
+  test("It can not derive a type name from complex expressions", () => {
+    expect(customTestRun('let myTag = let x = 2 in tag #int; _printType myTag')[0])
       .toBe('#typeof(tag #int)')
   })
 
@@ -580,12 +590,12 @@ describe('Type declarations', () => {
     expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3 }').length).toBe(0)
     expect(customTestRun('let MyType = type #{ x #int }; let value #:MyType = { x: 3, y: 4 }').length).toBe(0)
     expect(() => customTestRun('let MyType = type #{ x #int }; let value #:MyType = {}'))
-      .toThrow('Can not assign the type "#{}" to an lvalue with the constraint "#{ x #int }". -- value.')
+      .toThrow('Can not assign the type "#{}" to an lvalue with the constraint "#:MyType". -- value.')
   })
 
   test('Custom types have the correct representation', () => {
     expect(customTestRun('let MyType = type #{ x #int }; _printType { x: 2, y: 3 } as #:MyType')[0])
-      .toBe('#{ x #int }')
+      .toBe('#:MyType')
   })
 })
 
@@ -601,12 +611,12 @@ describe('Typeof', () => {
 describe('Symbols', () => {
   test("Can not assign a symbol to a value who's type references a different symbol", () => {
     expect(() => customTestRun('let symb1 = symbol; let symb2 = symbol; let symb3 #typeof(symb1) = symb2'))
-      .toThrow('Can not assign the type "#typeof(symbol)" to an lvalue with the constraint "#typeof(symbol)". -- symb3.')
+      .toThrow('Can not assign the type "#typeof(symbol symb2)" to an lvalue with the constraint "#typeof(symbol symb1)". -- symb3.')
   })
 
   test("Able to assign a symbol to a value who's type references the same symbol", () => {
     expect(customTestRun('let symb1 = symbol; let symb2 #typeof(symb1) = symb1; _printType symb2')[0])
-      .toBe('#typeof(symbol)')
+      .toBe('#typeof(symbol symb1)')
   })
 
   // A symbol expression will always return the same symbol each time it's executed.
@@ -622,6 +632,28 @@ describe('Symbols', () => {
         let value #typeof(symb1) = symb2
       }
     `).length).toBe(0)
+  })
+
+  describe('auto-determine symbol name', () => {
+    test('It is able to auto-determine the symbol name from the declaration', () => {
+      expect(customTestRun('let mySymb = symbol; _printType mySymb')[0])
+        .toBe('#typeof(symbol mySymb)')
+    })
+
+    test('It is able to auto-determine the symbol name from a declaration with a "where" assertion', () => {
+      expect(customTestRun('let mySymb where true = symbol; _printType mySymb')[0])
+        .toBe('#typeof(symbol mySymb)')
+    })
+
+    test('It is able to auto-determine the symbol name from an expression-declaration', () => {
+      expect(customTestRun('let res = let mySymb = symbol in _printType mySymb')[0])
+        .toBe('#typeof(symbol mySymb)')
+    })
+
+    test('It is unable to auto-determine the symbol name from complex expressions', () => {
+      expect(customTestRun('let mySymb = let x = 2 in symbol; _printType mySymb')[0])
+        .toBe('#typeof(symbol)')
+    })
   })
 })
 
