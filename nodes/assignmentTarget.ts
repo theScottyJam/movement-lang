@@ -13,6 +13,7 @@ import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
+import { pipe } from '../util'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
@@ -64,8 +65,8 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
     return {
       outward: {
         moduleShape: export_
-          ? types.createRecord({ nameToType: new Map([[identifier, finalType]]) })
-          : types.createRecord({ nameToType: new Map() }),
+          ? types.createRecord({ nameToType: new Map([[identifier, finalType]]), symbolToInfo: new Map() })
+          : types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
       },
       type: maybeTypeConstraint ?? types.createUnknown(),
       typePayload: { typeConstraint: maybeTypeConstraint ?? null }
@@ -73,17 +74,34 @@ AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
   },
 })
 
-interface DestructurObjPayload { entries: Map<string, AnyAssignmentTargetNode> }
-export const destructureObj = (pos: Position, { entries }: DestructurObjPayload) =>
-  AssignmentTargetNode.create<DestructurObjPayload>('destructureRecord', pos, { entries })
+interface DestructurRecordPayload {
+  entries: readonly (
+    { type: 'IDENTIFIER', name: string, target: AnyAssignmentTargetNode, keyPos: Position } |
+    { type: 'SYMBOL', symbNode: AnyInstructionNode, target: AnyAssignmentTargetNode, keyPos: Position }
+  )[]
+}
+export const destructureRecord = (pos: Position, { entries }: DestructurRecordPayload) =>
+  AssignmentTargetNode.create<DestructurRecordPayload>('destructureRecord', pos, { entries })
 
-AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
+AssignmentTargetNode.register<DestructurRecordPayload, {}>('destructureRecord', {
   exec: (rt, { entries }, { incomingValue, allowFailure = false }) => {
     const allBindings = []
     if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
-    for (const [identifier, assignmentTarget] of entries) {
-      const innerValue = assertRawRecordValue(incomingValue.raw).get(identifier)
-      if (!innerValue) return null
+    for (const entry of entries) {
+      const { type: entryType, target: assignmentTarget } = entry
+      let innerValue
+      if (entryType === 'IDENTIFIER') {
+        innerValue = assertRawRecordValue(incomingValue.raw).nameToValue.get(entry.name)
+        if (!innerValue) return null
+      } else if (entryType === 'SYMBOL') {
+        const symbValue = InstructionNode.exec(entry.symbNode, rt).value
+        if (typeof symbValue.raw !== 'symbol') throw new Error()
+
+        innerValue = assertRawRecordValue(incomingValue.raw).symbolToValue.get(symbValue.raw)
+        if (!innerValue) return null
+      } else {
+        throw new Error()
+      }
       const bindings = AssignmentTargetNode.exec(assignmentTarget, rt, { incomingValue: innerValue, allowFailure })
       if (!bindings) return null
       allBindings.push(...bindings)
@@ -95,24 +113,63 @@ AssignmentTargetNode.register<DestructurObjPayload, {}>('destructureRecord', {
   },
   typeCheck: (actions, inwardState) => ({ pos, entries }, { incomingType, allowWidening, export: export_ }) => {
     if (incomingType !== AssignmentTargetNode.noTypeIncoming) {
-      Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map() }), pos, `Attempted to perform a record-destructure on the non-record type ${Type.repr(incomingType)}.`)
+      Type.assertTypeAssignableTo(incomingType, types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }), pos, `Attempted to perform a record-destructure on the non-record type ${Type.repr(incomingType)}.`)
     }
 
-    const nameToType = new Map()
-    for (const [identifier, assignmentTarget] of entries) {
+    const nameToType = new Map() as types.RecordType['data']['nameToType']
+    const symbolToInfo = new Map() as types.RecordType['data']['symbolToInfo']
+    const seenKeys = new Set<string | symbol>()
+    for (const entry of entries) {
+      const { type: entryType, target: assignmentTarget, keyPos } = entry
+      let getTypeFromIncommingRecordData: (recordData: types.RecordType['data']) => AnyType
+      let keyName: string
+      let setType: (type: Type.AnyType) => void
+      if (entryType === 'IDENTIFIER') {
+        const { name: identifier } = entry
+        if (seenKeys.has(identifier)) {
+          throw new SemanticError(`duplicate identifier found in record destructure: ${entry.name}`, keyPos)
+        }
+        seenKeys.add(identifier)
+
+        getTypeFromIncommingRecordData = recordData => recordData.nameToType.get(identifier)
+        keyName = identifier
+        setType = type => nameToType.set(identifier, assignmentTargetType)
+      } else if (entryType === 'SYMBOL') {
+        const { symbNode } = entry
+        // TODO: Not sure if I should use getConstrainingType() here.
+        const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbNode, inwardState).type)
+        if (!types.isSymbol(symbType)) {
+          throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbNode.pos)
+        }
+        if (seenKeys.has(symbType.data.value)) {
+          throw new SemanticError(`duplicate symbol key found in record destructure: ${types.reprSymbolWithoutTypeText(symbType)}`, keyPos)
+        }
+        seenKeys.add(symbType.data.value)
+
+        getTypeFromIncommingRecordData = recordData => recordData.symbolToInfo.get(symbType.data.value)?.type 
+        keyName = types.reprSymbolWithoutTypeText(symbType)
+        setType = type => symbolToInfo.set(symbType.data.value, { symbType, type })
+      } else {
+        throw new Error()
+      }
+
       let valueType = incomingType === AssignmentTargetNode.noTypeIncoming || types.isEffectivelyNever(incomingType)
         ? incomingType
-        : assertRecordInnerDataType(Type.assertIsConcreteType(incomingType).data).nameToType.get(identifier)
+        : pipe(
+          Type.assertIsConcreteType(incomingType).data,
+          $=> assertRecordInnerDataType($),
+          $=> getTypeFromIncommingRecordData($),
+        )
       if (!valueType && allowWidening) valueType = AssignmentTargetNode.noTypeIncoming
       if (!valueType) {
         if (incomingType === AssignmentTargetNode.noTypeIncoming) throw new Error('INTERNAL ERROR')
-        throw new SemanticError(`Unable to destructure property ${identifier} from type ${Type.repr(incomingType)}`, DUMMY_POS)
+        throw new SemanticError(`Unable to destructure property "${keyName}" from type ${Type.repr(incomingType)}`, keyPos)
       }
       const assignmentTargetType = actions.checkType(AssignmentTargetNode, assignmentTarget, inwardState, { incomingType: valueType, allowWidening, export: export_ }).type
-      nameToType.set(identifier, assignmentTargetType)
+      setType(assignmentTargetType)
     }
     return {
-      type: types.createRecord({ nameToType }),
+      type: types.createRecord({ nameToType, symbolToInfo }),
     }
   },
 })

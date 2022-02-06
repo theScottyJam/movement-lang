@@ -24,16 +24,6 @@ describe('Literals', () => {
   test('It throws on an invalid escape sequence', () => {
     expect(() => customTestRun(String.raw`print 'x \a'`)[0].raw).toThrow('Unrecognized string escape sequence "\\a". -- \'x \\a\'.')
   })
-
-  test('It creates a record', () => {
-    const map = customTestRun(`print { x: false, y: 'test', z: 2, w: {}, v: { a: 1 } }`)[0].raw
-    expect(map.get('x').raw).toBe(false)
-    expect(map.get('y').raw).toBe('test')
-    expect(map.get('z').raw).toBe(2n)
-    expect(map.size).toBe(5)
-    expect(map.get('w').raw.size).toBe(0)
-    expect(map.get('v').raw.get('a').raw).toBe(1n)
-  })
 })
 
 describe('Main syntax', () => {
@@ -61,11 +51,6 @@ describe('Main syntax', () => {
   test('Not-equals operator', () => {
     expect(customTestRun('print 2 != 2')[0].raw).toBe(false)
     expect(customTestRun('print 2 != 3')[0].raw).toBe(true)
-  })
-
-  test('Property access', () => {
-    expect(customTestRun('let record = { a: 2, b: true }; print record.a')[0].raw).toBe(2n)
-    expect(customTestRun('let record = { a: 2, b: true }; print record.b')[0].raw).toBe(true)
   })
 
   test('Expression-if', () => {
@@ -124,20 +109,52 @@ describe('Assignment', () => {
     expect(errorCodeOf(() => customTestRun('print let y where y != 4 = 2 + 2 in y'))).toBe('failedValueConstraint')
   })
 
-  test('Destructuring', () => {
-    expect(customTestRun('let { x: x_ } = { x: 2 }; print x_')[0].raw).toBe(2n)
-    expect(customTestRun('let { x: x_, y: y_ } = { x: 2, y: 3 }; print x_ + y_')[0].raw).toBe(5n)
-    expect(customTestRun('let { x: x_ } = { x: 2, y: 3 }; print x_')[0].raw).toBe(2n)
-    expect(customTestRun('let { x: x_ } = { x: { y: 2 } }; print x_.y')[0].raw).toBe(2n)
-    expect(customTestRun('let { x: x_, y: { z: z_ } } = { x: 2, y: { z: 3 } }; print x_ + z_')[0].raw).toBe(5n)
-  })
+  describe('Record destructuring', () => {
+    test('Destructuring', () => {
+      expect(customTestRun('let { x: x_ } = { x: 2 }; print x_')[0].raw).toBe(2n)
+      expect(customTestRun('let { x: x_, y: y_ } = { x: 2, y: 3 }; print x_ + y_')[0].raw).toBe(5n)
+      expect(customTestRun('let { x: x_ } = { x: 2, y: 3 }; print x_')[0].raw).toBe(2n)
+      expect(customTestRun('let { x: x_ } = { x: { y: 2 } }; print x_.y')[0].raw).toBe(2n)
+      expect(customTestRun('let { x: x_, y: { z: z_ } } = { x: 2, y: { z: 3 } }; print x_ + z_')[0].raw).toBe(5n)
+    })
 
-  test('Destructuring with constraints', () => {
-    expect(customTestRun('let { x: x_ where x_ == 2 } = { x: 2 }; print x_')[0].raw).toBe(2n)
-    expect(errorCodeOf(() => customTestRun('let { x: x_ where x_ != 2 } = { x: 2 }; print x_'))).toBe('failedValueConstraint')
-    expect(customTestRun('let { x: x_ where x_ == 2, y: y_ where x_ == y_ } = { x: 2, y: 2 }; print x_ + y_')[0].raw).toBe(4n)
-    expect(errorCodeOf(() => customTestRun('let { x: x_ where x_ == 2, y: y_ where x_ != y_ } = { x: 2, y: 2 }; print x_ + y_'))).toBe('failedValueConstraint')
-    expect(customTestRun('let { x: x_ } where x_ == 2 = { x: 2 }; print x_')[0].raw).toBe(2n)
+    test('Destructuring symbol keys', () => {
+      expect(customTestRun('let symb1 = symbol; let { [symb1]: x_ } = { [symb1]: 2 }; print x_')[0].raw).toBe(2n)
+      expect(customTestRun('let symb1 = symbol; let symb2 = symbol; let { [symb1]: x_, [symb2]: y_, z: z_ } = { [symb1]: 2, [symb2]: 3, z: 4 }; print x_ + y_ + z_')[0].raw).toBe(9n)
+      expect(customTestRun('let symb1 = symbol; let symb2 = symbol; let { [symb1]: x_ } = { [symb1]: 2, [symb2]: 3 }; print x_')[0].raw).toBe(2n)
+    })
+
+    test('Can not use the same key multiple times when destructuring', () => {
+      expect(() => customTestRun('let { x: x_, y: y_, x: x2_ } = { x: 2, y: 3 }'))
+        .toThrow('duplicate identifier found in record destructure: x -- x.')
+      expect(() => customTestRun('let symb1 = symbol; let symb2 = symbol; let { [symb1]: x_, [symb2]: y_, z: z_, [symb1]: x2_ } = { [symb1]: 2, [symb2]: 3, z: 4 }'))
+        .toThrow('duplicate symbol key found in record destructure: symbol symb1 -- symb1.')
+    })
+
+    test('Destructuring with constraints', () => {
+      expect(customTestRun('let { x: x_ where x_ == 2 } = { x: 2 }; print x_')[0].raw).toBe(2n)
+      expect(errorCodeOf(() => customTestRun('let { x: x_ where x_ != 2 } = { x: 2 }; print x_'))).toBe('failedValueConstraint')
+      expect(customTestRun('let { x: x_ where x_ == 2, y: y_ where x_ == y_ } = { x: 2, y: 2 }; print x_ + y_')[0].raw).toBe(4n)
+      expect(errorCodeOf(() => customTestRun('let { x: x_ where x_ == 2, y: y_ where x_ != y_ } = { x: 2, y: 2 }; print x_ + y_'))).toBe('failedValueConstraint')
+      expect(customTestRun('let { x: x_ } where x_ == 2 = { x: 2 }; print x_')[0].raw).toBe(2n)
+    })
+
+    test('Destructuring symbol keys with constraints', () => {
+      expect(customTestRun('let symb1 = symbol; let { [symb1]: x_ where x_ == 2 } = { [symb1]: 2 }; print x_')[0].raw).toBe(2n)
+      expect(errorCodeOf(() => customTestRun('let symb1 = symbol; let { [symb1]: x_ where x_ != 2 } = { [symb1]: 2 }; print x_'))).toBe('failedValueConstraint')
+    })
+
+    test('Only symbols can be used in dynamic properties', () => {
+      expect(() => customTestRun('let { [2]: x } = {}'))
+        .toThrow('Only symbol types can be used in a dynamic property. Received type \"#int\". -- 2.')
+    })
+
+    test('Can not destructure non-existent properties', () => {
+      expect(() => customTestRun('let { x: x_ } = {}'))
+        .toThrow('Unable to destructure property "x" from type #{} -- x.')
+      expect(() => customTestRun('let symb = symbol; let { [symb]: x_ } = {}'))
+        .toThrow('Unable to destructure property "symbol symb" from type #{} -- symb.')
+    })
   })
 
   test('Duplicate assignment is disallowed', () => {
@@ -166,6 +183,60 @@ describe('Assignment', () => {
   test('"$" can not be accessed', () => {
     expect(() => customTestRun('let $ = 2; print $'))
       .toThrow('Attempted to access undefined variable $ -- $.')
+  })
+})
+
+describe('Records', () => {
+  test('It creates a record', () => {
+    const map = customTestRun("print { x: false, y: 'test', z: 2, w: {}, v: { a: 1 } }")[0].raw.nameToValue
+    expect(map.get('x').raw).toBe(false)
+    expect(map.get('y').raw).toBe('test')
+    expect(map.get('z').raw).toBe(2n)
+    expect(map.size).toBe(5)
+    expect(map.get('w').raw.nameToValue.size).toBe(0)
+    expect(map.get('v').raw.nameToValue.get('a').raw).toBe(1n)
+  })
+
+  test('Records can not contain duplicate keys', () => {
+    expect(() => customTestRun('let x = { a: 1, b: 2, a: 3 }'))
+      .toThrow('duplicate identifier found in record: a -- a.')
+    expect(() => customTestRun('let sym = symbol; let x = { [sym]: 1, [symbol]: 2, a: 4, [sym]: 3 }'))
+      .toThrow('duplicate symbol key found in record: symbol sym -- sym.')
+  })
+
+  test('Record can not contain non-symbol dynamic key', () => {
+    expect(() => customTestRun('let x = { [2]: 3 }'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#int". -- 2.')
+    expect(() => customTestRun('let x = { [symbol as #unknown]: 3 }'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#unknown". -- symbol as #unknown.')
+  })
+
+  test('Property access', () => {
+    expect(customTestRun('let record = { a: 2, b: true }; print record.a')[0].raw).toBe(2n)
+    expect(customTestRun('let record = { a: 2, b: true }; print record.b')[0].raw).toBe(true)
+  })
+
+  test('Can not access missing property', () => {
+    expect(() => customTestRun('let record = { a: 2 }; print record.b'))
+      .toThrow('Failed to find the identifier "b" on the record of type #{ a #int }. -- record.b.')
+  })
+
+  test('Symbol property access', () => {
+    expect(customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3, [symb1]: 4 }; print record[symb1]')[0].raw).toBe(4n)
+  })
+
+  test('Can not access missing symbol property', () => {
+    expect(() => customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3, [symb1]: 4 }; print record[symbol]'))
+      .toThrow('Failed to find the symbol "symbol" on the record of type #{ a #int, [symbol] #int, [symbol symb1] #int }.')
+    expect(() => customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3 }; print record[symb1]'))
+      .toThrow('Failed to find the symbol "symbol symb1" on the record of type #{ a #int, [symbol] #int }.')
+  })
+
+  test('Can not use non-symbol for dynamic property access', () => {
+    expect(() => customTestRun('let x = {}; print x[2]'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#int". -- 2.')
+    expect(() => customTestRun('let x = {}; print x[symbol as #unknown]'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#unknown". -- symbol as #unknown.')
   })
 })
 
@@ -293,12 +364,40 @@ describe('Types', () => {
       .toThrow('Can not assign the type \"#string\" to an lvalue with the constraint \"#int\". -- y.')
   })
 
-  test('Record types', () => {
-    expect(customTestRun('let x #{ x #int } = { x: 2 }').length).toBe(0)
-    expect(customTestRun('let x #{ x #int } = { x: 2, y: 3 }').length).toBe(0)
-    expect(() => customTestRun('let x #{ x #int, y #int } = { x: 2 }'))
-      .toThrow('Can not assign the type "#{ x #int }" to an lvalue with the constraint "#{ x #int, y #int }". -- x.')
+  describe('Records', () => {
+    test('Record types', () => {
+      expect(customTestRun('let x #{ x #int } = { x: 2 }').length).toBe(0)
+      expect(customTestRun('let x #{ x #int } = { x: 2, y: 3 }').length).toBe(0)
+      expect(() => customTestRun('let x #{ x #int, y #int } = { x: 2 }'))
+        .toThrow('Can not assign the type "#{ x #int }" to an lvalue with the constraint "#{ x #int, y #int }". -- x.')
+    })
+
+    test('Record types with private keys', () => {
+      expect(customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int, y #int } = { [sym]: 2, y: 3 }').length).toBe(0)
+      expect(customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int } = { [sym]: 2, [symbol]: 3 }').length).toBe(0)
+      expect(() => customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int, [#typeof(symbol)] #int } = { [sym]: 2 }'))
+        .toThrow('Can not assign the type "#{ [symbol sym] #int }" to an lvalue with the constraint "#{ [symbol sym] #int, [symbol] #int }". -- x.')
+      expect(() => customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int } = { [symbol]: 2 }'))
+        .toThrow('Can not assign the type "#{ [symbol] #int }" to an lvalue with the constraint "#{ [symbol sym] #int }". -- x.')
+    })
+
+    test('Record types can not have duplicate keys', () => {
+      expect(() => customTestRun('type alias #T = #{ x #int, y #int, x #int }'))
+        .toThrow('This record type definition contains the same key "x" multiple times. -- x.')
+      expect(() => customTestRun('let sym = symbol; type alias #T = #{ [#typeof(sym)] #int, [#typeof(symbol)] #int, y #int, [#typeof(sym)] #int }'))
+        .toThrow('This record type definition contains the same symbol key "symbol sym" multiple times. -- #typeof(sym).')
+      expect(customTestRun('type alias #T = #{ [#typeof(symbol)] #int, [#typeof(symbol)] #int }').length).toBe(0)
+    })
+
+    test('Only symbols are allowed as dynamic record properties', () => {
+      expect(() => customTestRun('type alias #T = #{ [#int] #int }'))
+        .toThrow('Only symbol types can be used in a dynamic property type field. Received type "#int". -- #int.')
+      expect(() => customTestRun('let sym = symbol as #unknown; type alias #T = #{ [#typeof(sym)] #int }'))
+        .toThrow('Only symbol types can be used in a dynamic property type field. Received type "#unknown". -- #typeof(sym).')
+    })
   })
+
+
 
   test('Core function types', () => {
     expect(customTestRun('let fn #(#int) => #int = (x #int) => x').length).toBe(0)
@@ -384,8 +483,8 @@ describe('Types', () => {
   })
 
   test('Both arms of expression-if must return compatible types', () => {
-    expect(customTestRun('print if true then { x: 2 } else { x: 3 }')[0].raw.get('x').raw).toBe(2n)
-    expect(customTestRun('print if true then { x: 2 } else { x: 3, y: 2 }')[0].raw.get('x').raw).toBe(2n)
+    expect(customTestRun('print if true then { x: 2 } else { x: 3 }')[0].raw.nameToValue.get('x').raw).toBe(2n)
+    expect(customTestRun('print if true then { x: 2 } else { x: 3, y: 2 }')[0].raw.nameToValue.get('x').raw).toBe(2n)
     expect(() => customTestRun('print if true then { x: 2 } else { y: 2 }'))
       .toThrow('The following "if true" case of this condition has the type "#{ x #int }", which is incompatible with the "if not" case\'s type, "#{ y #int }". -- { x: 2 }.')
     expect(() => customTestRun('print if true then { x: 2, z: 0 } else { y: 2, z: 1 }'))
@@ -402,6 +501,10 @@ describe('Pattern matching', () => {
     expect(customTestRun('print match { x: 2 } { when { x: X } then X; when {} then 3 }')[0].raw).toBe(2n)
   })
 
+  test('Basic pattern matching functionality with symbols', () => {
+    expect(customTestRun('let symb1 = symbol; let symb2 = symbol; print match { [symb1]: 2 } { when { [symb1]: X, [symb2]: Y #int } then Y + 5; when { [symb1]: X } then X }')[0].raw).toBe(2n)
+  })
+
   test('Type-widening within pattern matching', () => {
     expect(customTestRun(`
       let obj #{ x #int } = { x: 2, y: 3 }
@@ -410,6 +513,21 @@ describe('Pattern matching', () => {
 
     expect(() => customTestRun('print match { x: 2 } { when { x: X, y: Y } then Y }'))
       .toThrow('Could not auto-determine the type of this lvalue, please specify it with a type constraint. -- Y.')
+    
+    expect(customTestRun(`
+      let symb1 = symbol
+      let symb2 = symbol
+      let obj #{ [#typeof(symb1)] #int } = { [symb1]: 2, [symb2]: 3 }
+      print match obj { when { [symb2]: Y #int } then Y + 5; when { [symb1]: X } then X }
+    `)[0].raw).toBe(8n)
+
+    expect(() => customTestRun('let symb1 = symbol; let symb2 = symbol; print match { [symb1]: 2 } { when { [symb1]: X, [symb2]: Y } then Y }'))
+      .toThrow('Could not auto-determine the type of this lvalue, please specify it with a type constraint. -- Y.')
+  })
+
+  test('Pattern matching with dynamic record properties must use symbols as keys', () => {
+    expect(() => customTestRun('print match {} { when { [2]: x } then x }'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#int". -- 2')
   })
 
   test('Pattern matching with basic primitives', () => {
@@ -797,6 +915,7 @@ describe('Etc', () => {
 # Test having a tagged value with a large data type, get assigned to a smaller destructure, and vice-versa (possibly already tested)
 # All function parameters must have a declared type (this error has changed, but I should still test it)
 # Do I have good type-alias tests?
+# generics with records with private symbols
 #
 # unknown and never
 # * When all branches of an if/else throw, the function's return type should be #never instead of #unit

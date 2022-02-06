@@ -73,10 +73,8 @@ const construct = {
 
   record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
     nodes.value.record(STDLIB_POS, {
-      content: new Map(
-        Object.entries(mapping)
-          .map(([key, node]) => [key, { target: node, maybeRequiredTypeNode: null }]
-      )),
+      recordEntries: Object.entries(mapping)
+        .map(([key, node]) => ({ type: 'IDENTIFIER', name: key, target: node, maybeRequiredTypeNode: null, keyPos: STDLIB_POS })),
     }),
 
   internalTag: () => nodes.value.tag(STDLIB_POS, {

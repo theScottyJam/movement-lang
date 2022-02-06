@@ -52,7 +52,7 @@ export const createApi = ({ content, dependencies }: CreateApiOpts) => AstApi.cr
     const { rtRespState } = InstructionNode.exec(content, rt)
 
     const nameToType = new Map([...rtRespState.exports.entries()].map(([name, value]) => [name, value.type]))
-    return values.createRecord(rtRespState.exports, types.createRecord({ nameToType }))
+    return values.createRecord({ nameToValue: rtRespState.exports, symbolToValue: new Map() }, types.createRecord({ nameToType, symbolToInfo: new Map() }))
   },
   typeCheck: ({ behaviors = {}, moduleDefinitions, importStack, stdLibShape, isMainModule = true }) => {
     const typeStateOpts = {
@@ -333,15 +333,45 @@ export const propertyAccess = (pos: Position, payload: PropertyAccessPayload) =>
 InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
   exec: (rt, { l, identifier }) => {
     const lRes = InstructionNode.exec(l, rt)
-    const nameToValue = assertRawRecordValue(lRes.value.raw)
+    const { nameToValue } = assertRawRecordValue(lRes.value.raw)
     if (!nameToValue.has(identifier)) throw new Error(`Internal Error: Expected to find the identifier "${identifier}" on a record, and that identifier did not exist`)
     return { rtRespState: lRes.rtRespState, value: nameToValue.get(identifier) }
   },
   typeCheck: (actions, inwardState) => ({ pos, l, identifier }) => {
     const lType = actions.checkType(InstructionNode, l, inwardState).type
-    Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
+    Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
     const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).nameToType.get(identifier)
     if (!result) throw new SemanticError(`Failed to find the identifier "${identifier}" on the record of type ${Type.repr(lType)}.`, pos)
+    return { type: result }
+  },
+})
+
+interface SymbolPropertyAccessPayload { l: AnyInstructionNode, symbolExprNode: AnyInstructionNode }
+export const symbolPropertyAccess = (pos: Position, payload: SymbolPropertyAccessPayload) =>
+  InstructionNode.create<SymbolPropertyAccessPayload>('symbolPropertyAccess', pos, payload)
+
+InstructionNode.register<SymbolPropertyAccessPayload, {}>('symbolPropertyAccess', {
+  exec: (rt, { l, symbolExprNode }) => {
+    const { rtRespState: symbRtRespState, value: symbExpr } = InstructionNode.exec(symbolExprNode, rt)
+    if (typeof symbExpr.raw !== 'symbol') throw new Error()
+    const lRes = InstructionNode.exec(l, rt)
+    const { symbolToValue } = assertRawRecordValue(lRes.value.raw)
+    if (!symbolToValue.has(symbExpr.raw)) throw new Error(`Internal Error: Expected to find the identifier "${types.reprSymbolWithoutTypeText(symbExpr.type as any)}" on a record, and that identifier did not exist`)
+    return {
+      rtRespState: RtRespState.merge(symbRtRespState, lRes.rtRespState),
+      value: symbolToValue.get(symbExpr.raw),
+    }
+  },
+  typeCheck: (actions, inwardState) => ({ pos, l, symbolExprNode }) => {
+    const lType = actions.checkType(InstructionNode, l, inwardState).type
+    Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
+    // TODO: Not sure if I should use getConstrainingType() here.
+    const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
+    if (!types.isSymbol(symbType)) {
+      throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbolExprNode.pos)
+    }
+    const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).symbolToInfo.get(symbType.data.value)?.type
+    if (!result) throw new SemanticError(`Failed to find the symbol "${types.reprSymbolWithoutTypeText(symbType)}" on the record of type ${Type.repr(lType)}.`, pos)
     return { type: result }
   },
 })

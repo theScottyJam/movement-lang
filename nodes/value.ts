@@ -2,10 +2,11 @@ import * as InstructionNode from './variants/InstructionNode';
 import * as TypeNode from './variants/TypeNode';
 import * as AssignmentTargetNode from './variants/AssignmentTargetNode';
 import { assertNotNullish } from './helpers/typeAssertions';
-import { BadSyntaxError } from '../language/exceptions'
+import { BadSyntaxError, SemanticError } from '../language/exceptions'
 import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
 import * as RtRespState from '../language/RtRespState'
+import * as Value from '../language/Value'
 import * as values from '../language/values'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
@@ -20,6 +21,7 @@ type Position = Position.Position
 type Runtime = Runtime.Runtime
 type AnyType = Type.AnyType
 type InwardTypeState = InwardTypeState.InwardTypeState
+type AnyValue = Value.AnyValue
 
 type purityTypes = typeof PURITY[keyof typeof PURITY]
 
@@ -135,12 +137,12 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   },
 })
 
-interface RecordPayload { name: string | null }
+interface SymbolPayload { name: string | null }
 interface SymbolTypePayload { type: types.SymbolType }
-export const symbol = (pos: Position, payload: RecordPayload) =>
-  InstructionNode.create<RecordPayload>('symbol', pos, payload)
+export const symbol = (pos: Position, payload: SymbolPayload) =>
+  InstructionNode.create<SymbolPayload>('symbol', pos, payload)
 
-InstructionNode.register<RecordPayload, SymbolTypePayload>('symbol', {
+InstructionNode.register<SymbolPayload, SymbolTypePayload>('symbol', {
   exec: (rt, { type }) => ({
     rtRespState: RtRespState.create(),
     value: values.createSymbol(type.data.value),
@@ -154,39 +156,86 @@ InstructionNode.register<RecordPayload, SymbolTypePayload>('symbol', {
   },
 })
 
-interface RecordValueDescription { target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null }
-interface RecordPayload { content: Map<string, RecordValueDescription> }
+interface RecordPayload {
+  readonly recordEntries: readonly (
+    { type: 'IDENTIFIER', name: string, target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null, keyPos: Position } |
+    { type: 'SYMBOL', symbolExprNode: AnyInstructionNode, target: AnyInstructionNode, maybeRequiredTypeNode: AnyTypeNode | null, keyPos: Position }
+  )[]
+}
 interface RecordTypePayload { finalType: types.RecordType }
 export const record = (pos: Position, payload: RecordPayload) =>
   InstructionNode.create<RecordPayload>('record', pos, payload)
 
 InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
-  exec: (rt, { content, finalType }) => {
-    const nameToValue = new Map()
+  exec: (rt, { recordEntries, finalType }) => {
     const rtRespStates = []
-    for (const [name, { target }] of content) {
-      const { rtRespState, value } = InstructionNode.exec(target, rt)
-      rtRespStates.push(rtRespState)
-      nameToValue.set(name, value)
+    const nameToValue = new Map<string, AnyValue>()
+    const symbolToValue = new Map<symbol, AnyValue>()
+    for (const entry of recordEntries) {
+      if (entry.type === 'IDENTIFIER') {
+        const { name, target } = entry
+        const { rtRespState, value } = InstructionNode.exec(target, rt)
+        rtRespStates.push(rtRespState)
+        nameToValue.set(name, value)
+      } else if (entry.type === 'SYMBOL') {
+        const { symbolExprNode, target } = entry
+        const { rtRespState: rtRespState1, value: symbValue } = InstructionNode.exec(symbolExprNode, rt)
+        const { rtRespState: rtRespState2, value } = InstructionNode.exec(target, rt)
+        rtRespStates.push(rtRespState1, rtRespState2)
+        if (typeof symbValue.raw !== 'symbol') throw new Error()
+        symbolToValue.set(symbValue.raw, value)
+      } else {
+        throw new Error()
+      }
     }
 
     return {
       rtRespState: RtRespState.merge(...rtRespStates),
-      value: values.createRecord(nameToValue, assertNotNullish(finalType))
+      value: values.createRecord({ nameToValue, symbolToValue }, assertNotNullish(finalType))
     }
   },
-  typeCheck: (actions, inwardState) => ({ content }) => {
+  typeCheck: (actions, inwardState) => ({ recordEntries }) => {
     const nameToType = new Map<string, AnyType>()
-    for (const [name, { target, maybeRequiredTypeNode }] of content) {
+    const symbolToInfo = new Map() as types.RecordType['data']['symbolToInfo']
+    const seenKeys = new Set<string | symbol>()
+    for (const entry of recordEntries) {
+      const { type: entryType, target, maybeRequiredTypeNode, keyPos } = entry
+
+      // type-check key
+      let addTypeToMap: (type: AnyType) => void
+      if (entryType === 'IDENTIFIER') {
+        if (seenKeys.has(entry.name)) {
+          throw new SemanticError(`duplicate identifier found in record: ${entry.name}`, keyPos)
+        }
+        seenKeys.add(entry.name)
+        addTypeToMap = finalType => nameToType.set(entry.name, finalType)
+      } else if (entryType === 'SYMBOL') {
+        const { symbolExprNode } = entry
+        // TODO: Not sure if I should use getConstrainingType() here.
+        const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
+        if (!types.isSymbol(symbType)) {
+          throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbolExprNode.pos)
+        }
+
+        if (seenKeys.has(symbType.data.value)) {
+          throw new SemanticError(`duplicate symbol key found in record: ${types.reprSymbolWithoutTypeText(symbType)}`, keyPos)
+        }
+        seenKeys.add(symbType.data.value)
+        addTypeToMap = type => symbolToInfo.set(symbType.data.value, { symbType, type })
+      } else {
+        throw new Error()
+      }
+
+      // type-check value
       const targetType = actions.checkType(InstructionNode, target, inwardState).type
       const maybeRequiredType = maybeRequiredTypeNode ? actions.checkType(TypeNode, maybeRequiredTypeNode, inwardState).type : null
       if (maybeRequiredType) {
         Type.assertTypeAssignableTo(targetType, maybeRequiredType, target.pos)
       }
-      const finalType = maybeRequiredType ?? targetType
-      nameToType.set(name, finalType)
+
+      addTypeToMap(maybeRequiredType ?? targetType)
     }
-    const finalType = types.createRecord({ nameToType })
+    const finalType = types.createRecord({ nameToType, symbolToInfo })
     return { type: finalType, typePayload: { finalType } }
   },
 })

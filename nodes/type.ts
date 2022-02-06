@@ -15,10 +15,6 @@ type AnyType = Type.AnyType
 
 type ValueOf<T> = T[keyof T]
 
-const mapMapValues = <T, U, V>(map: Map<T, U>, mapFn: (value: U) => V) => (
-  new Map([...map.entries()].map(([key, value]) => [key, mapFn(value)]))
-)
-
 interface SimpleTypePayload { typeName: string }
 export const simpleType = (pos: Position, payload: SimpleTypePayload) =>
   TypeNode.create<SimpleTypePayload>('simpleType', pos, payload)
@@ -85,14 +81,49 @@ TypeNode.register<TypeOfExprPayload>('typeOfExpr', {
   },
 })
 
-interface RecordTypePayload { nameToTypeNode: Map<string, AnyTypeNode> }
+interface RecordTypePayload {
+  readonly recordTypeEntries: readonly (
+    { type: 'IDENTIFIER', name: string, typeNode: AnyTypeNode, keyPos: Position } |
+    { type: 'SYMBOL', symbTypeNode: AnyTypeNode, typeNode: AnyTypeNode, keyPos: Position }
+  )[]
+}
 export const recordType = (pos: Position, payload: RecordTypePayload) =>
   TypeNode.create<RecordTypePayload>('recordType', pos, payload)
 
 TypeNode.register<RecordTypePayload>('recordType', {
-  typeCheck: (actions, inwardState) => ({ nameToTypeNode }) => {
-    const nameToType = mapMapValues(nameToTypeNode, typeNode => actions.checkType(TypeNode, typeNode, inwardState).type)
-    return { type: types.createRecord({ nameToType }) }
+  typeCheck: (actions, inwardState) => ({ recordTypeEntries }) => {
+    const nameToType = new Map() as types.RecordType['data']['nameToType']
+    const symbolToInfo = new Map() as types.RecordType['data']['symbolToInfo']
+    const seenKeys = new Set<string | symbol>()
+    for (const entry of recordTypeEntries) {
+      if (entry.type === 'IDENTIFIER') {
+        const { name, typeNode, keyPos } = entry
+        if (seenKeys.has(entry.name)) {
+          throw new SemanticError(`This record type definition contains the same key "${entry.name}" multiple times.`, keyPos)
+        }
+        seenKeys.add(entry.name)
+
+        nameToType.set(name, actions.checkType(TypeNode, typeNode, inwardState).type)
+      } else if (entry.type === 'SYMBOL') {
+        const { symbTypeNode, typeNode, keyPos } = entry
+        // TODO: Not sure if I should use getConstrainingType() here.
+        const symbType = Type.getConstrainingType(actions.checkType(TypeNode, symbTypeNode, inwardState).type)
+        if (!types.isSymbol(symbType)) {
+          throw new SemanticError(`Only symbol types can be used in a dynamic property type field. Received type "${Type.repr(symbType)}".`, symbTypeNode.pos)
+        }
+
+        if (seenKeys.has(symbType.data.value)) {
+          throw new SemanticError(`This record type definition contains the same symbol key "${types.reprSymbolWithoutTypeText(symbType)}" multiple times.`, keyPos)
+        }
+        seenKeys.add(symbType.data.value)
+
+        const type = actions.checkType(TypeNode, typeNode, inwardState).type
+        symbolToInfo.set(symbType.data.value, { symbType, type, })
+      } else {
+        throw new Error()
+      }
+    }
+    return { type: types.createRecord({ nameToType, symbolToInfo }) }
   },
 })
 

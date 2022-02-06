@@ -71,10 +71,8 @@
       '.': '.',
 
       ',': ',',
-      /*
-      "[" return '['
-      "]" return ']'
-      */
+      '[': '[',
+      ']': ']',
       '(': '(',
       ')': ')',
       '{': '{',
@@ -429,6 +427,10 @@ expr80
     boundary(({ pos }, [expr,, ,,identifierToken]) => (
       nodes.propertyAccess(pos, { l: expr, identifier: identifierToken.value })
     ))
+  %} | expr80 _ "[" _ expr10 _ "]" {%
+    boundary(({ pos }, [expr,, ,,symbolExprNode]) => (
+      nodes.symbolPropertyAccess(pos, { l: expr, symbolExprNode })
+    ))
   %} | expr100 {% id %}
 
   genericParamList
@@ -455,17 +457,21 @@ expr100
     )
   %} | stringLiteral {%
     id
-  %} | "{" _ deliminated[userValueIdentifier _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
+  %} | "{" _ deliminated[(userValueIdentifier | "[" _ expr10 _ "]") _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     boundary(({ pos }, [,, entries, ]) => {
-      const content = new Map()
-      for (const [identifier, typeNodeEntry,, ,, target] of entries) {
+      const content = []
+      for (const [identifierOrSymbEntry, typeNodeEntry,, ,, target] of entries) {
         const [maybeRequiredTypeNode] = typeNodeEntry ?? []
-        if (content.has(identifier.value)) {
-          throw new SemanticError(`duplicate identifier found in record: ${identifier}`, asPos(pos.file, identifier))
+        if (identifierOrSymbEntry[0].type !== '[') {
+          const [identifier] = identifierOrSymbEntry
+          const keyPos = asPos(pos.file, identifier)
+          content.push({ type: 'IDENTIFIER', name: identifier.value, maybeRequiredTypeNode, target, keyPos })
+        } else {
+          const [,, symbolExprNode] = identifierOrSymbEntry
+          content.push({ type: 'SYMBOL', symbolExprNode, maybeRequiredTypeNode, target, keyPos: symbolExprNode.pos })
         }
-        content.set(identifier.value, { maybeRequiredTypeNode, target })
       }
-      return nodes.value.record(pos, { content })
+      return nodes.value.record(pos, { recordEntries: content })
     })
   %} | "match" _ expr10 _ "{" _ ("when" _ pattern10 _ "then" _ expr10 (_ ";"):? _):+ "}" {%
     boundary(({ pos }, [,, matchValue,, ,, rawMatchArms, ]) => {
@@ -551,12 +557,19 @@ pattern40
         directOutput: { [chanel.bindName]: identifier.value },
       })
     })
-  %} | "{" _ deliminated[identifier _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
-    boundary(({ pos }, [,, destructureEntries]) => (
-      nodes.assignmentTarget.destructureObj(pos, {
-        entries: new Map(destructureEntries.map(([identifier,, ,, target]) => [identifier.value, target]))
+  %} | "{" _ deliminated[(identifier | "[" _ expr10 _ "]") _ ":" _ pattern10 _, "," _, ("," _):?] "}" {%
+    boundary(({ pos }, [,, destructureEntries]) => {
+      const entries = destructureEntries.map(([identifierOrSymbolEntry,, ,, target]) => {
+        if (identifierOrSymbolEntry[0].type !== '[') {
+          const [identifier] = identifierOrSymbolEntry
+          return { type: 'IDENTIFIER', name: identifier.value, target, keyPos: asPos(pos.file, identifier) }
+        } else {
+          const [,, symbNode] = identifierOrSymbolEntry
+          return { type: 'SYMBOL', symbNode, target, keyPos: symbNode.pos }
+        }
       })
-    ))
+      return nodes.assignmentTarget.destructureRecord(pos, { entries })
+    })
   %}
 
 type
@@ -572,16 +585,20 @@ type
     boundary(({ pos }, [,, ,, expr]) => (
       nodes.type.typeOfExpr(pos, { expr })
     ))
-  %} | "#" "{" _ deliminated[userValueIdentifier _ type _, "," _, ("," _):?] "}" {%
+  %} | "#" "{" _ deliminated[(userValueIdentifier | "[" _ type _ "]") _ type _, "," _, ("," _):?] "}" {%
     boundary(({ pos }, [, ,, entries]) => {
-      const nameToTypeNode = new Map()
-      for (const [identifierToken,, typeNode] of entries) {
-        if (nameToTypeNode.has(identifierToken.value)) {
-          throw new SemanticError(`This record type definition contains the same key "${identifierToken.value}" multiple times.`, asPos(pos.file, identifierToken))
+      const content = entries.map(([identifierOrTypeEntry,, typeNode]) => {
+        if (identifierOrTypeEntry[0].type !== '[') {
+          const [identifierToken] = identifierOrTypeEntry
+          const keyPos = asPos(pos.file, identifierToken)
+          return { type: 'IDENTIFIER', name: identifierToken.value, typeNode, keyPos }
+        } else {
+          const [,, symbTypeNode] = identifierOrTypeEntry
+          const keyPos = symbTypeNode.pos
+          return { type: 'SYMBOL', symbTypeNode, typeNode, keyPos }
         }
-        nameToTypeNode.set(identifierToken.value, typeNode)
-      }
-      return nodes.type.recordType(pos, { nameToTypeNode })
+      })
+      return nodes.type.recordType(pos, { recordTypeEntries: content })
     })
   %} | ("#gets" _ | "#") (genericParamDefList _):? typeList _ "=>" _ type {%
     boundary(({ pos }, [[callModifierToken], genericParamDefListEntry, paramTypeNodes,, ,, bodyTypeNode]) => {

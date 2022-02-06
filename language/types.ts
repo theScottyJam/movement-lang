@@ -28,13 +28,15 @@ export const createBoolean = () => booleanCategory.create()
 
 interface SymbolData { name?: string | null, value: symbol }
 export type SymbolType = Type.ConcreteType<{ name: 'symbol', data: SymbolData }>
-const SymbolCategory = Type.createCategory('symbol', {
-  repr: (self: SymbolType) => `#typeof(symbol${self.data.name ? ' ' + self.data.name : ''})`,
+const symbolCategory = Type.createCategory('symbol', {
+  repr: (self: SymbolType) => `#typeof(${reprSymbolWithoutTypeText(self)})`,
   compare: (self: SymbolType, other: SymbolType) => self.data.value === other.data.value,
 })
 export const createSymbol = ({ name, value }: Partial<SymbolData>) => (
-  SymbolCategory.create({ data: { name: name ?? null, value: value ?? Symbol() } })
+  symbolCategory.create({ data: { name: name ?? null, value: value ?? Symbol() } })
 )
+export const reprSymbolWithoutTypeText = (self: SymbolType) => `symbol${self.data.name ? ' ' + self.data.name : ''}`
+export const isSymbol = (type: Type.AnyConcreteType): type is SymbolType => symbolCategory.typeInCategory(type)
 
 // Used only within the content of a private tag, to hold arbitrary information
 export type InternalType = Type.ConcreteType<{ name: 'internal', data: undefined }>
@@ -152,16 +154,31 @@ export const createTagged = ({ tag }: TaggedTypeData): TaggedType => taggedCateg
 
 interface RecordTypeData {
   readonly nameToType: Map<string, Type.AnyType>
+  readonly symbolToInfo: Map<symbol, { symbType: SymbolType, type: Type.AnyType }>
 }
 
 export type RecordType = Type.ConcreteType<{ name: 'record', data: RecordTypeData }>
 const recordCategory = Type.createCategory('record', {
-  repr: (self: RecordType) => self.data.nameToType.size === 0
+  repr: (self: RecordType) => self.data.nameToType.size + self.data.symbolToInfo.size === 0
     ? '#{}'
-    : '#{ ' + [...self.data.nameToType.entries()].map(([name, type]) => `${name} ${Type.repr(type)}`).join(', ') + ' }',
+    : (
+      '#{ ' +
+      [
+        ...[...self.data.nameToType.entries()]
+          .map(([name, type]) => `${name} ${Type.repr(type)}`),
+        ...[...self.data.symbolToInfo.entries()]
+          .map(([, { symbType, type }]) => `[${reprSymbolWithoutTypeText(symbType)}] ${Type.repr(type)}`),
+      ].join(', ') +
+      ' }'
+    ),
   compare: (self: RecordType, other: RecordType) => {
     for (const [name, type] of other.data.nameToType) {
       const ourType = self.data.nameToType.get(name)
+      if (!ourType) return false
+      if (!Type.isTypeAssignableTo(ourType, type)) return false
+    }
+    for (const [symb, { type }] of other.data.symbolToInfo) {
+      const ourType = self.data.symbolToInfo.get(symb)?.type
       if (!ourType) return false
       if (!Type.isTypeAssignableTo(ourType, type)) return false
     }
@@ -171,17 +188,24 @@ const recordCategory = Type.createCategory('record', {
     for (const [name, type] of self.data.nameToType) {
       Type.matchUpGenerics(type, { usingType: usingType.data.nameToType.get(name), onGeneric })
     }
+    for (const [symb, { type }] of self.data.symbolToInfo) {
+      Type.matchUpGenerics(type, { usingType: usingType.data.symbolToInfo.get(symb).type, onGeneric })
+    }
   },
   fillGenericParams: (self: RecordType, { getReplacement }): RecordType => {
-    const newNameToType = new Map()
+    const newNameToType = new Map() as RecordTypeData['nameToType']
+    const newSymbolToInfo = new Map() as RecordTypeData['symbolToInfo']
     for (const [name, type] of self.data.nameToType) {
       newNameToType.set(name, Type.fillGenericParams(type, { getReplacement }))
     }
-    return createRecord({ nameToType: newNameToType })
+    for (const [symb, { symbType, type }] of self.data.symbolToInfo) {
+      newSymbolToInfo.set(symb, { symbType, type: Type.fillGenericParams(type, { getReplacement }) })
+    }
+    return createRecord({ nameToType: newNameToType, symbolToInfo: newSymbolToInfo })
   },
 })
 
-export const createRecord = (nameToType: RecordTypeData): RecordType => recordCategory.create({ data: nameToType })
+export const createRecord = (data: RecordTypeData): RecordType => recordCategory.create({ data })
 
 
 // Function //

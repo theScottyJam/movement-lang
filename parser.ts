@@ -101,8 +101,11 @@ function recursiveParse(path_, { loadModuleSource = null }: RecursiveParseOpts =
 function runStdLib(): ModuleInfo {
   if (globalThis.skipStdLib) {
     return {
-      module: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() })),
-      moduleShape: types.createRecord({ nameToType: new Map() }),
+      module: values.createRecord(
+        { nameToValue: new Map(), symbolToValue: new Map() },
+        types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
+      ),
+      moduleShape: types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
       typeCheckContexts: new Map(),
     }
   }
@@ -110,12 +113,15 @@ function runStdLib(): ModuleInfo {
   const { typeCheckContexts, type: moduleShape } = ast.typeCheck({
     moduleDefinitions: new Map(),
     importStack: ['%stdLib%'],
-    stdLibShape: types.createRecord({ nameToType: new Map() }),
+    stdLibShape: types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
     isMainModule: false,
   })
   const module = ast.exec({
     moduleDefinitions: new Map(),
-    stdLib: values.createRecord(new Map(), types.createRecord({ nameToType: new Map() })),
+    stdLib: values.createRecord(
+      { nameToValue: new Map(), symbolToValue: new Map() },
+      types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
+    ),
     typeCheckContexts,
   })
   return { module, moduleShape, typeCheckContexts }

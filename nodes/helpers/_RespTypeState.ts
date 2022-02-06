@@ -20,7 +20,7 @@ export function create(opts: Partial<RespTypeState> = {}): RespTypeState {
   const {
     outerFnVars = [],
     returnTypes = [],
-    moduleShape = types.createRecord({ nameToType: new Map() }),
+    moduleShape = types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }),
     typeCheckContexts = new Map(),
   } = opts
 
@@ -46,8 +46,11 @@ export function merge(...states: RespTypeState[]): RespTypeState {
     outerFnVars: [...new Set(states.flatMap(s => s.outerFnVars))],
     returnTypes: states.flatMap(s => s.returnTypes),
     moduleShape: states.reduce((accShape, state) => (
-      types.createRecord({ nameToType: new Map([...state.moduleShape.data.nameToType, ...accShape.data.nameToType]) })
-    ), types.createRecord({ nameToType: new Map() })),
+      types.createRecord({
+        nameToType: new Map([...state.moduleShape.data.nameToType, ...accShape.data.nameToType]),
+        symbolToInfo: new Map([...state.moduleShape.data.symbolToInfo, ...accShape.data.symbolToInfo]),
+      })
+    ), types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() })),
     typeCheckContexts: new Map(states.flatMap(s => [...s.typeCheckContexts.entries()])),
   })
 }

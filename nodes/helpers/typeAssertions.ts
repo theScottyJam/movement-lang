@@ -15,13 +15,12 @@ export function assertBigInt(value: unknown): bigint {
   return value
 }
 
-export function assertRawRecordValue(x: unknown): values.RecordValue['raw'] {
-  if (!(x instanceof Map)) {
+export function assertRawRecordValue(value: unknown): values.RecordValue['raw'] {
+  if (!(value?.['nameToValue'] instanceof Map && value?.['symbolToValue'] instanceof Map)) {
     throw new Error(`INTERNAL ERROR: Received a value of an incorrect type`)
   }
 
-  // Assuming values are a correct type, because iterating over each value would be too slow.
-  return x as values.RecordValue['raw']
+  return value as values.RecordValue['raw']
 }
 
 export function assertRecordInnerDataType(value: unknown): types.RecordType['data'] {
@@ -29,7 +28,6 @@ export function assertRecordInnerDataType(value: unknown): types.RecordType['dat
     throw new Error(`INTERNAL ERROR: Received a value of an incorrect type`)
   }
 
-  // Assuming values are a correct type, because iterating over each value would be too slow.
   return value as types.RecordType['data']
 }
 

@@ -33,7 +33,7 @@ export const createTag = (type: types.TagType) => Value.create({ raw: undefined,
 export type TaggedValue = Value.Value<types.TaggedType, Value.AnyValue>
 export const createTagged = (content: Value.AnyValue, type: types.TaggedType) => Value.create({ raw: content, type })
 
-type RawRecordValue = Map<string, Value.AnyValue>
+interface RawRecordValue { nameToValue: Map<string, Value.AnyValue>, symbolToValue: Map<symbol, Value.AnyValue> }
 export type RecordValue = Value.Value<types.RecordType, RawRecordValue>
 export const createRecord = (raw: RawRecordValue, type: types.RecordType) => Value.create({ raw, type })
 
