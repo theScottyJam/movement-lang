@@ -1,4 +1,5 @@
 import * as Type from './Type'
+import * as typeProtocols from './typeProtocols'
 import { PURITY, getPurityLevel } from './constants'
 import { zip } from '../util'
 
@@ -88,13 +89,12 @@ const typeContainerCategory = Type.createCategory('typeContainer', {
       containedType: Type.fillGenericParams(self.data.containedType, { getReplacement }),
     })
   },
-  // TODO: It should be possible to use template parameters in the type definition
-  // (so I shouldn't need to use getConstrainingType)
-  createDescendentMatchingType: (self: TypeContainerType) => Type.getConstrainingType(self.data.containedType),
+  protocols: typeProtocols.typeContainer,
 })
 export const createTypeContainer = (data: TypeContainerData): TypeContainerType => (
   typeContainerCategory.create({ data })
 )
+export const isTypeContainer = (type: Type.AnyConcreteType): type is TypeContainerType => typeContainerCategory.typeInCategory(type)
 
 
 // Tag //
@@ -118,7 +118,7 @@ const tagCategory = Type.createCategory('tag', {
       boxedType: Type.fillGenericParams(self.data.boxedType, { getReplacement }),
     })
   },
-  createDescendentMatchingType: (self: TagType) => createTagged({ tag: self })
+  protocols: typeProtocols.tag,
 })
 export const createTag = (data: TagTypeData): TagType => tagCategory.create({ data })
 
@@ -167,7 +167,7 @@ const recordCategory = Type.createCategory('record', {
         ...[...self.data.nameToType.entries()]
           .map(([name, type]) => `${name} ${Type.repr(type)}`),
         ...[...self.data.symbolToInfo.entries()]
-          .map(([, { symbType, type }]) => `[${reprSymbolWithoutTypeText(symbType)}] ${Type.repr(type)}`),
+          .map(([, { symbType, type }]) => `[${Type.repr(symbType)}] ${Type.repr(type)}`),
       ].join(', ') +
       ' }'
     ),
@@ -203,6 +203,7 @@ const recordCategory = Type.createCategory('record', {
     }
     return createRecord({ nameToType: newNameToType, symbolToInfo: newSymbolToInfo })
   },
+  protocols: typeProtocols.record,
 })
 
 export const createRecord = (data: RecordTypeData): RecordType => recordCategory.create({ data })

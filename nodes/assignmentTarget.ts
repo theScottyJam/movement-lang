@@ -182,7 +182,13 @@ AssignmentTargetNode.register<DestructureTaggedPayload, {}>('destructureTagged',
   exec: (rt, { tag, innerContent }, { incomingValue, allowFailure = false }) => {
     if (!Type.isTypeParameter(incomingValue.type) && types.isUnknown(incomingValue.type)) return null
     const { value: tagValue } = InstructionNode.exec(tag, rt)
-    if (!Type.isTypeAssignableTo(incomingValue.type, Type.getTypeMatchingDescendants(tagValue.type, DUMMY_POS))) return null
+
+    const innerTagTypeResult = pipe(
+      Type.getProtocols(tagValue.type, DUMMY_POS),
+      $=> $.childType(tagValue.type),
+    )
+    if (!innerTagTypeResult.success) throw new Error()
+    if (!Type.isTypeAssignableTo(incomingValue.type, innerTagTypeResult.type)) return null
     const innerValue = assertRawTaggedValue(incomingValue.raw)
     return AssignmentTargetNode.exec(innerContent, rt, { incomingValue: innerValue, allowFailure })
   },

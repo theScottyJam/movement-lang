@@ -370,7 +370,10 @@ InstructionNode.register<SymbolPropertyAccessPayload, {}>('symbolPropertyAccess'
     if (!types.isSymbol(symbType)) {
       throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbolExprNode.pos)
     }
-    const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).symbolToInfo.get(symbType.data.value)?.type
+    const result = pipe(
+      Type.getConstrainingType(lType).data,
+      $=> assertRecordInnerDataType($).symbolToInfo.get(symbType.data.value)?.type,
+    )
     if (!result) throw new SemanticError(`Failed to find the symbol "${types.reprSymbolWithoutTypeText(symbType)}" on the record of type ${Type.repr(lType)}.`, pos)
     return { type: result }
   },

@@ -227,9 +227,9 @@ describe('Records', () => {
 
   test('Can not access missing symbol property', () => {
     expect(() => customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3, [symb1]: 4 }; print record[symbol]'))
-      .toThrow('Failed to find the symbol "symbol" on the record of type #{ a #int, [symbol] #int, [symbol symb1] #int }.')
+      .toThrow('Failed to find the symbol "symbol" on the record of type #{ a #int, [#typeof(symbol)] #int, [#typeof(symbol symb1)] #int }.')
     expect(() => customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3 }; print record[symb1]'))
-      .toThrow('Failed to find the symbol "symbol symb1" on the record of type #{ a #int, [symbol] #int }.')
+      .toThrow('Failed to find the symbol "symbol symb1" on the record of type #{ a #int, [#typeof(symbol)] #int }.')
   })
 
   test('Can not use non-symbol for dynamic property access', () => {
@@ -376,9 +376,9 @@ describe('Types', () => {
       expect(customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int, y #int } = { [sym]: 2, y: 3 }').length).toBe(0)
       expect(customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int } = { [sym]: 2, [symbol]: 3 }').length).toBe(0)
       expect(() => customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int, [#typeof(symbol)] #int } = { [sym]: 2 }'))
-        .toThrow('Can not assign the type "#{ [symbol sym] #int }" to an lvalue with the constraint "#{ [symbol sym] #int, [symbol] #int }". -- x.')
+        .toThrow('Can not assign the type "#{ [#typeof(symbol sym)] #int }" to an lvalue with the constraint "#{ [#typeof(symbol sym)] #int, [#typeof(symbol)] #int }". -- x.')
       expect(() => customTestRun('let sym = symbol; let x #{ [#typeof(sym)] #int } = { [symbol]: 2 }'))
-        .toThrow('Can not assign the type "#{ [symbol] #int }" to an lvalue with the constraint "#{ [symbol sym] #int }". -- x.')
+        .toThrow('Can not assign the type "#{ [#typeof(symbol)] #int }" to an lvalue with the constraint "#{ [#typeof(symbol sym)] #int }". -- x.')
     })
 
     test('Record types can not have duplicate keys', () => {
@@ -867,6 +867,30 @@ describe('Generics', () => {
   // Use one generic param within the constraint of another
   // Try things like addition and function calling with generics (w/ type constraints) - I might not be doing concrete/param types correctly
   // Eventually: Usage with tags.
+})
+
+describe('Custom child types', () => {
+  // Tags and symbols with child-type syntax are tested elsewhere.
+
+  test('A record can have a custom child-type', () => {
+    expect(customTestRun('let Thing = { [$Symbol.childType]: type #int }; let x #:Thing = 2; print x')[0].raw).toBe(2n)
+    expect(customTestRun('let Thing = { [$Symbol.childType]: type #int }; let x #:Thing = 2; _printType x')[0]).toBe('#int')
+    expect(() => customTestRun("let Thing = { [$Symbol.childType]: type #int }; let x #:Thing = 'abc'"))
+      .toThrow('Can not assign the type "#string" to an lvalue with the constraint "#int". -- x.')
+  })
+
+  // TODO
+  xtest('Can not assign a non-contained-type to $Symbol.childType', () => {
+    expect(() => customTestRun('let Thing = { [$Symbol.childType]: 2 }'))
+      .toThrow('??')
+  })
+
+  test('Can not use child-type syntax on a value without the child-type protocol', () => {
+    expect(() => customTestRun('let x #:2 = 3'))
+      .toThrow('The provided value can not be used to make a descendent-matching type. -- #:2.')
+    expect(() => customTestRun('let x #:{} = 3'))
+      .toThrow('The provided value can not be used to make a descendent-matching type. -- #:{}.')
+  })
 })
 
 describe('Etc', () => {

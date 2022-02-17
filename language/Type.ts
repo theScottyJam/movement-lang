@@ -34,6 +34,10 @@ interface FillGenericParamsFnOpts {
   readonly getReplacement: getReplacementFn
 }
 
+export interface Protocols<T extends CategoryGenerics> {
+  childType?: ((self: Type<T>) => { success: false } | { success: true, type: AnyConcreteType }) | null,
+}
+
 export interface CategoryInfo<T extends CategoryGenerics> {
   readonly name: T['name']
   readonly comparisonOverride: typeof COMPARISON_OVERRIDES[keyof typeof COMPARISON_OVERRIDES]
@@ -42,7 +46,7 @@ export interface CategoryInfo<T extends CategoryGenerics> {
     readonly compare: (self: ConcreteType<T>, other: ConcreteType<T>) => boolean,
     readonly matchUpGenerics: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void,
     readonly fillGenericParams: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>,
-    readonly createDescendentMatchingType: ((self: Type<T>) => AnyConcreteType) | null
+    readonly protocols: Protocols<T>,
   }
 }
 
@@ -71,7 +75,7 @@ interface CreateCategoryOpts<T extends CategoryGenerics> {
   readonly comparisonOverride?: typeof COMPARISON_OVERRIDES[keyof typeof COMPARISON_OVERRIDES]
   readonly matchUpGenerics?: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void
   readonly fillGenericParams?: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>
-  readonly createDescendentMatchingType?: ((self: Type<T>) => AnyConcreteType) | null
+  readonly protocols?: Protocols<T>
 }
 
 interface CreateTypeOpts<Data> {
@@ -128,7 +132,7 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
     comparisonOverride = null,
     matchUpGenerics = defaultMatchUpGenericsFn,
     fillGenericParams = defaultFillGenericParamsFn,
-    createDescendentMatchingType = null,
+    protocols = {},
   } = opts
 
   const categoryInfo: CategoryInfo<T> = {
@@ -139,7 +143,7 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
       compare,
       matchUpGenerics,
       fillGenericParams,
-      createDescendentMatchingType,
+      protocols,
     }
   }
 
@@ -209,11 +213,12 @@ export function fillGenericParams<T extends CategoryGenerics>(type: Type<T>, { g
   return type.category[categoryBehaviors].fillGenericParams(type, { getReplacement })
 }
 
-export function getTypeMatchingDescendants(type: AnyType, pos: Position) {
-  if (isTypeParameter(type) || type.category[categoryBehaviors].createDescendentMatchingType == null) {
-    throw new SemanticError('The provided value can not be used to make a descendent-matching type.', pos)
+export function getProtocols(type: AnyType, pos: Position) {
+  if (isTypeParameter(type)) {
+    // TODO: Maybe I should allow generic type protocols?
+    throw new SemanticError('Can not perform this operation on a generic type', pos)
   }
-  return type.category[categoryBehaviors].createDescendentMatchingType(type)
+  return type.category[categoryBehaviors].protocols
 }
 
 //

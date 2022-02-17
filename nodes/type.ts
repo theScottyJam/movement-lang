@@ -57,10 +57,15 @@ export const descendentType = (pos: Position, payload: DescendentTypePayload) =>
 TypeNode.register<DescendentTypePayload>('descendentType', {
   typeCheck: (actions, inwardState) => ({ pos, expr }) => {
     const type = actions.noExecZone(() => {
-      return pipe(
-        actions.checkType(InstructionNode, expr, inwardState).type,
-        $=> Type.getTypeMatchingDescendants($, pos)
-      )
+      const missingProtocolError = () => {
+        return new SemanticError('The provided value can not be used to make a descendent-matching type.', pos)
+      }
+      const parentType = actions.checkType(InstructionNode, expr, inwardState).type
+      const childTypeProtocol = Type.getProtocols(parentType, pos).childType
+      if (!childTypeProtocol) throw missingProtocolError()
+      const result = childTypeProtocol(parentType)
+      if (!result.success) throw missingProtocolError()
+      return result.type
     })
 
     return { type }

@@ -7,6 +7,8 @@ import * as values from '../language/values'
 import * as nodes from '../nodes'
 import * as InstructionNode from '../nodes/variants/InstructionNode'
 import * as TypeNode from '../nodes/variants/TypeNode'
+import { prototolSymbols } from '../language/typeProtocols'
+import { pipe } from '../util'
 import { PURITY } from '../language/constants'
 import * as Runtime from '../language/Runtime'
 
@@ -71,10 +73,14 @@ const construct = {
       InstructionNode.create<InstructionNodePayload>(jsFnBodyName, STDLIB_POS, { argCount, returnTypeNode, dependencies, fn })
     })(),
 
-  record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }) =>
+  record: (mapping: { [key: string]: InstructionNode.AnyInstructionNode }, symbolMapping: { [symbName: string]: InstructionNode.AnyInstructionNode } = {}) =>
     nodes.value.record(STDLIB_POS, {
-      recordEntries: Object.entries(mapping)
-        .map(([key, node]) => ({ type: 'IDENTIFIER', name: key, target: node, maybeRequiredTypeNode: null, keyPos: STDLIB_POS })),
+      recordEntries: [
+        ...Object.entries(mapping)
+          .map(([key, node]) => ({ type: 'IDENTIFIER' as const, name: key, target: node, maybeRequiredTypeNode: null, keyPos: STDLIB_POS })),
+        ...Object.entries(symbolMapping)
+          .map(([symbName, node]) => ({ type: 'SYMBOL' as const, symbolExprNode: nodes.varLookup(STDLIB_POS, { identifier: symbName }), target: node, maybeRequiredTypeNode: null, keyPos: STDLIB_POS })),
+      ],
     }),
 
   internalTag: () => nodes.value.tag(STDLIB_POS, {
@@ -92,13 +98,21 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
   const private_: any = {}
 
   private_.MutableTag = construct.internalTag()
+  private_.SymbolChildType = nodes.value.symbol(STDLIB_POS, { name: '$Symbol.childType', value: prototolSymbols.childType })
 
   // TODO: I should support more than ints
   stdLibDef.Mutable = construct.record((() => {
     const MutableDef: any = {}
     const mutableTagTypeNode = (varName: string) => nodes.type.nodeFromTypeGetter(STDLIB_POS, {
-      typeGetter: actions =>
-        Type.getTypeMatchingDescendants(actions.follow.lookupVar(varName).type, STDLIB_POS)
+      typeGetter: actions => {
+        const parentType = actions.follow.lookupVar(varName).type
+        const result = pipe(
+          Type.getProtocols(parentType, STDLIB_POS),
+          $=> $.childType(parentType),
+        )
+        if (!result.success) throw new Error()
+        return result.type
+      }
     })
     
     MutableDef.create = construct.fn({
@@ -133,6 +147,23 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
     })
 
     return MutableDef
+  })())
+
+  stdLibDef.Symbol = construct.record((() => {
+    const SymbolDef: any = {}
+
+    SymbolDef.childType = nodes.varLookup(STDLIB_POS, { identifier: 'SymbolChildType' })
+
+    return SymbolDef
+  })())
+
+  stdLibDef.Int = construct.record(...(() => {
+    const IntDef: any = {}
+    const IntSymbolDef: any = {}
+
+    IntSymbolDef.SymbolChildType = nodes.value.typeContainer(STDLIB_POS, { name: '#:$Int', typeNode: construct.simpleType('#int') })
+
+    return [IntDef, IntSymbolDef] as const
   })())
 
   return { public: stdLibDef, private: private_ }

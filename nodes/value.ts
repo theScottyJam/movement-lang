@@ -137,7 +137,7 @@ InstructionNode.register<TagPayload, TagTypePayload>('tag', {
   },
 })
 
-interface SymbolPayload { name: string | null }
+interface SymbolPayload { name?: string | null, value?: symbol | null }
 interface SymbolTypePayload { type: types.SymbolType }
 export const symbol = (pos: Position, payload: SymbolPayload) =>
   InstructionNode.create<SymbolPayload>('symbol', pos, payload)
@@ -147,8 +147,8 @@ InstructionNode.register<SymbolPayload, SymbolTypePayload>('symbol', {
     rtRespState: RtRespState.create(),
     value: values.createSymbol(type.data.value),
   }),
-  typeCheck: (actions, inwardState) => ({ name }) => {
-    const type = types.createSymbol({ name })
+  typeCheck: (actions, inwardState) => ({ name, value: maybeValue }) => {
+    const type = types.createSymbol({ name, value: maybeValue })
     return {
       type,
       typePayload: { type }
