@@ -1,14 +1,12 @@
 import * as FollowTypeState from './_FollowTypeState'
 import { SemanticError } from '../../language/exceptions'
 import type { RecordType } from '../../language/types'
-import type * as Type from '../../language/Type'
+import * as Type from '../../language/Type'
 import type { Position } from '../../language/Position'
 
 type FollowTypeState = FollowTypeState.FollowTypeState
 
-type createTypeFn = () => Type.AnyType
 interface VarLookupInfo { type: Type.AnyType, fromOuterFn: boolean }
-interface TypeLookupInfo { createType: createTypeFn }
 
 type WithFollowState = <T extends unknown[], U>(callback: WithFollowStateCallback<T, U>) => (...args: T) => U
 
@@ -34,7 +32,12 @@ export const create = (withFollowState: WithFollowState) => ({
   withScope<T>({ forFn }: { forFn: symbol }, callback: () => T): T {
     const pushScope = withFollowState(followState => () => ({
       followState: FollowTypeState.update(followState, {
-        scopes: [...followState.scopes, { forFn, typeNamespace: new Map(), valueNamespace: new Map() }],
+        scopes: [...followState.scopes, {
+          forFn,
+          typeNamespace: new Map(),
+          valueNamespace: new Map(),
+          typeParamSentinelsInScope: new Set(),
+        }],
       }),
     }))
     const popScope = withFollowState(followState => () => ({
@@ -66,39 +69,55 @@ export const create = (withFollowState: WithFollowState) => ({
     }
   }),
   
-  addToScopeInTypeNamespace: withFollowState(followState => (identifier: string, createType: createTypeFn, pos: Position) => {
-    // createType() is a function and not a plain type, so that unknown types can be added
-    // to the scope, and each reference to the unknown type will produce a unique unknown instance
-    // preventing you from assigning one unknown type to another.
+  addToScopeInTypeNamespace: withFollowState(followState => (identifier: string, type: Type.AnyType, pos: Position) => {
     if (identifier === '$') return
-    const newScope = new Map(top(followState.scopes).typeNamespace)
-    if (newScope.has(identifier)) {
+    const newTypeScope = new Map(top(followState.scopes).typeNamespace)
+    if (newTypeScope.has(identifier)) {
       throw new SemanticError(`Identifier "${identifier}" already exists in scope, please choose a different name.`, pos)
     }
-    newScope.set(identifier, createType)
+    newTypeScope.set(identifier, type)
+
+    const newTypeParamSentinelsInScope = new Set(top(followState.scopes).typeParamSentinelsInScope)
+    if (Type.isTypeParameter(type)) {
+      newTypeParamSentinelsInScope.add(type.parameterSentinel)
+    }
   
     return {
       followState: FollowTypeState.update(followState, {
         scopes: [
           ...followState.scopes.slice(0, -1),
-          { ...top(followState.scopes), typeNamespace: newScope },
+          {
+            ...top(followState.scopes),
+            typeNamespace: newTypeScope,
+            typeParamSentinelsInScope: newTypeParamSentinelsInScope
+          },
         ],
       }),
     }
   }),
 
-  // Looks up the type for a variable
+  /// Looks up the type for a variable. Returns null if it's not found.
   lookupVar: withFollowState(followState => (identifier: string) => ({ value: lookupVar(followState, identifier) })),
 
-  // Looks up a defined type, like #MyTypeAlias
-  lookupType: withFollowState(followState => (identifier: string): { value: TypeLookupInfo | null } => {
-    for (let scope of [...followState.scopes].reverse()) {
-      const createType = scope.typeNamespace.get(identifier)
-      if (createType) {
-        return { value: { createType } }
+  /// Looks up a defined type, like #MyTypeAlias. Returns null if it's not found.
+  lookupType: withFollowState(followState => (identifier: string): { value: Type.AnyType | null } => {
+    for (const scope of [...followState.scopes].reverse()) {
+      const type = scope.typeNamespace.get(identifier)
+      if (type) {
+        return { value: type }
       }
     }
     return { value: null }
+  }),
+
+  /// Looks up a type by a generic parameter's id/sentinel.
+  scopeHasTypeParamSentinel: withFollowState(followState => (typeParamSentinel: symbol): { value: boolean } => {
+    for (const scope of [...followState.scopes].reverse()) {
+      if (scope.typeParamSentinelsInScope.has(typeParamSentinel)) {
+        return { value: true }
+      }
+    }
+    return { value: false }
   }),
 
   getModuleShapes: withFollowState(followState => () => {

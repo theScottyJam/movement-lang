@@ -27,15 +27,15 @@ describe('Literals', () => {
 })
 
 describe('Main syntax', () => {
-  test('It adds', () => {
+  test('addition', () => {
     expect(customTestRun('print 2 + 3')[0].raw).toBe(5n)
   })
 
-  test('It subtracts', () => {
+  test('subtraction', () => {
     expect(customTestRun('print 2 - 3')[0].raw).toBe(-1n)
   })
 
-  test('It multiplies', () => {
+  test('multiplication', () => {
     expect(customTestRun('print 2 * 3')[0].raw).toBe(6n)
   })
 
@@ -51,6 +51,10 @@ describe('Main syntax', () => {
   test('Not-equals operator', () => {
     expect(customTestRun('print 2 != 2')[0].raw).toBe(false)
     expect(customTestRun('print 2 != 3')[0].raw).toBe(true)
+  })
+
+  test('parentheses', () => {
+    expect(customTestRun('print (1 + 3) * 2')[0].raw).toBe(8n)
   })
 
   test('Expression-if', () => {
@@ -223,6 +227,9 @@ describe('Records', () => {
 
   test('Symbol property access', () => {
     expect(customTestRun('let symb1 = symbol; let record = { a: 2, [symbol]: 3, [symb1]: 4 }; print record[symb1]')[0].raw).toBe(4n)
+    expect(() => customTestRun('let symb1 = symbol; let record = { a: 2, [symbol as #never]: 3, [symb1]: 4 }; print record[symb1]'))
+      .toThrow('Only symbol types can be used in a dynamic property. Received type "#never". -- symbol as #never.')
+    expect(customTestRun('let symb1 = symbol; let fn = <#T of #typeof(symb1)>(mySymb #T) => { [mySymb]: 4 }; print fn(symb1)[symb1]')[0].raw).toBe(4n)
   })
 
   test('Can not access missing symbol property', () => {
@@ -396,8 +403,6 @@ describe('Types', () => {
         .toThrow('Only symbol types can be used in a dynamic property type field. Received type "#unknown". -- #typeof(sym).')
     })
   })
-
-
 
   test('Core function types', () => {
     expect(customTestRun('let fn #(#int) => #int = (x #int) => x').length).toBe(0)
@@ -711,6 +716,16 @@ describe('Type declarations', () => {
       .toThrow('Can not assign the type "#{}" to an lvalue with the constraint "#:MyType". -- value.')
   })
 
+  test('Works with generics', () => {
+    expect(customTestRun('let MyType = type #{ x #int }; let fn = <#T of #typeof(MyType)>(MyNewType #T) => let value #:MyNewType = { x: 3 } in value; print fn(MyType).x')[0].raw).toBe(3n)
+    expect(customTestRun('let fn = <#T of #{ x #int }>(obj #T) => let MyType = type #T let res #:MyType = obj in res; print fn({ x: 2, y: 3 }).y')[0].raw).toBe(3n)
+  })
+
+  test('Does not work with #never', () => {
+    expect(() => customTestRun('let MyType = type #{ x #int } as #never; let value #:MyType = { x: 3 }'))
+      .toThrow('The provided value can not be used to make a descendent-matching type. -- #:MyType')
+  })
+
   test('Custom types have the correct representation', () => {
     expect(customTestRun('let MyType = type #{ x #int }; _printType { x: 2, y: 3 } as #:MyType')[0])
       .toBe('#:MyType')
@@ -778,48 +793,49 @@ describe('Symbols', () => {
 describe('Generics', () => {
   test('Basic generic functionality', () => {
     expect(customTestRun('let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 3)')[0].raw).toBe(2n)
-    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn<#int, #string>(false, 2, 'hi')")[0].raw).toBe('hi')
+    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x as #unknown else y as #unknown; print fn<#int, #string>(false, 2, 'hi')")[0].raw).toBe('hi')
 
     expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn<#int>(true, 2, 'hi')"))
       .toThrow('Failed to match a type found from an argument, \"#string\", with the generic param type \"#int\". -- \'hi\'.')
+    expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2) + 1")[0].raw).toBe(3n)
   })
 
-  // TODO: I assume this has the same issue as the "Type constraints on generics" test
-  xtest('Auto-determine generic types', () => {
+  test('Auto-determine generic types', () => {
     expect(customTestRun('let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, 2, 3)')[0].raw).toBe(2n)
-    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn(false, 2, 'hi')")[0].raw).toBe('hi')
-    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn<#int>(false, 2, 'hi')")[0].raw).toBe('hi')
+    expect(customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x as #unknown else y as #unknown; print fn(false, 2, 'hi')")[0].raw).toBe('hi')
+    expect(() => customTestRun("let fn = <#T, #U>(which #boolean, x #T, y #U) => if which then x else y; print fn(false, 2, 'hi')"))
+      .toThrow(`The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case's type, "#U".`)
     expect(customTestRun('let fn = <#T>({ inner: inner #T }) => inner; print fn({ inner: 2 })')[0].raw).toBe(2n)
 
     expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string>(2)"))
-      .toThrow('Found type "#int", but expected type "#string".')
+      .toThrow('Failed to match a type found from an argument, "#int", with the generic param type "#string". -- 2.')
     expect(() => customTestRun("let fn = <#T>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, 2, 'hi')"))
-      .toThrow('Found type "#string", but expected type "#int". -- ?')
+      .toThrow(`Failed to match a type found from an argument, "#string", with the generic param type "#int". -- 'hi'.`)
 
     expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; print fn(true, { x: 2 }, { x: 4, y: 3 }).x")[0].raw).toBe(2n)
     expect(customTestRun("let fn = <#T of #{ x #int }>(which #boolean, x #T, y #T) => if which then x else y; _printType fn(true, { x: 2 }, { x: 4, y: 3 })")[0]).toBe('#{ x #int }')
+    expect(() => customTestRun('let fn = <#T of #{}>() => let x #T = { y: 2 } as #never in 2; print fn()'))
+      .toThrow('"as" type assertion failed - failed to convert a type from "#{ y #int }" to #never') // Runtime error
   })
 
   test('Provide too many generic params', () => {
     expect(() => customTestRun("let fn = <#T>(x #T) => x; print fn<#string, #int>(2)"))
-      .toThrow('The function of type #(#T) => #T must be called with at most 1 generic parameters, but got called with 2. -- fn<#string, #int>(2).')
+      .toThrow('The function of type #<#T>(#T) => #T must be called with at most 1 generic parameters, but got called with 2. -- fn<#string, #int>(2).')
   })
 
-  // TODO: I need a way to automatically instantiate generic types to fix these tests
-  // so that the type constraint in a function parameter can have it's generic resolved at execution time.
-  xtest('Type constraints on generics', () => {
+  test('Type constraints on generics', () => {
     expect(customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ x: 3, y: 4 }) - 1')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ x: 3, y: 4 }) - 1')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 3, y: 4 } }) - 1')[0].raw).toBe(2n)
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ y #int }>({ inner: { y: 4 } })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
+      .toThrow('The generic type parameter #{ y #int } was provided, which does not conform to the constraint #{ x #int } -- #{ y #int }.')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn<#{ x #int, y #int }>({ inner: { x: 2 } })'))
-      .toThrow('Found type "#{ x #int }", but expected type "#{ x #int, y #int }". -- ?')
+      .toThrow('Failed to match a type found from an argument, "#{ x #int }", with the generic param type "#{ x #int, y #int }". -- { inner: { x: 2 } }')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>(obj #T) => obj.x; print fn({ y: 4 })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
+      .toThrow('Failed to match a type found from an argument, "#{ y #int }", with the generic param type constraint "#{ x #int }". -- { y: 4 }.')
     expect(() => customTestRun('let fn = <#T of #{ x #int }>({ inner: inner #T }) => inner.x; print fn({ inner: { y: 4 } })'))
-      .toThrow('Found type "#{ y #int }", but expected type "#{ x #int }". -- ?')
+      .toThrow('Failed to match a type found from an argument, "#{ y #int }", with the generic param type constraint "#{ x #int }". -- { inner: { y: 4 } }.')
   })
 
   test('Generic return types/values', () => {
@@ -835,38 +851,136 @@ describe('Generics', () => {
     expect(customTestRun("let fn = <#T, #U>({ a: a #T, b: b #U }) => { x: a, y: b }; print fn({ a: 2, b: 'hi' }).y")[0].raw).toBe('hi')
   })
 
-  // TODO
   test('Generic types are not interchangeable', () => {
-    // expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => if true then a else b; print fn(2, 'hi')"))
-    //   .toThrow('?')
-    // expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => let x #U = a in x; print fn(2, 'hi')"))
-    //   .toThrow('?')
+    expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => if true then a else b; print fn(2, 'hi')"))
+      .toThrow(`The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case's type, "#U". -- a.`)
+    expect(() => customTestRun("let fn = <#T, #U>(a #T, b #U) => let x #U = a in x; print fn(2, 'hi')"))
+      .toThrow('Can not assign the type "#T" to an lvalue with the constraint "#U". -- x.')
     expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => if true then a else b; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
       .toThrow('The following "if true" case of this condition has the type "#T", which is incompatible with the "if not" case\'s type, "#U". -- a')
     expect(() => customTestRun("let fn = <#T of #{ x #int }, #U of #{ x #int }>(a #T, b #U) => let z #U = a in z; print fn({ x: 2, z: 3 }, { x: 2, y: 3 })"))
       .toThrow('Can not assign the type "#T" to an lvalue with the constraint "#U". -- z.')
   })
 
-  // TODO
-  xtest('Generics from the same source are interchangeable', () => {
+  test('Generics from the same source are interchangeable', () => {
     expect(customTestRun('let fn = <#T>(x #T) => let y #T = x in y; print fn(2)')[0].raw).toBe(2n)
     expect(customTestRun('let fn = <#T of #{ y #int }>(x #T) => let y #T = x in y; print fn({ y: 2 }).y')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T>(x #T) => let inner1 = () => x let inner2 #typeof(inner1) = inner1 in inner2; print fn(2)()')[0].raw).toBe(2n)
+    expect(customTestRun('let fn = <#T>(x #T) => let inner1 = () => x let inner2 = () => x let inner3 #typeof(inner2) = inner1 in inner3; print fn(2)()')[0].raw).toBe(2n)
   })
 
-  // TODO
-  xtest('<unnamed test>', () => {
-    // TODO: I need to store the generic params on the stack, if I'm wanting to be able to use them in these sorts of locations.
-    expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)
+  describe('Generics used as type constraint', () => {
+    test('main tests', () => {
+      expect(() => customTestRun('let fn = <#T of #{ y #T }>(x #T) => 2'))
+        .toThrow('Type "#T" not found. -- #T.')
+      expect(() => customTestRun('let fn = <#T, #U of #{ y #T }>(x #U) => x.y; print fn({ y: 1 }) + 1'))
+        .toThrow('Failed to match a type found from an argument, "#{ y #int }", with the generic param type constraint "#{ y #T }".')
+      expect(customTestRun('let fn = <#T, #U of #{ y #T }>(x #U) => x.y; print fn<#int, #{ y #int }>({ y: 1 }) + 1')[0].raw).toBe(2n)
+      expect(customTestRun('let fn = <#T of #{}, #U of #T>(obj #U) => obj; print fn<#{ x #int }, #{ x #int, y #int }>({ x: 1, y: 2 }).y')[0].raw).toBe(2n)
+      expect(() => customTestRun('let fn = <#T of #{}, #U of #T>(obj #U) => obj; print fn<#{ x #int }, #{ y #int }>({ x: 1, y: 2 }).y'))
+        .toThrow('The generic type parameter #{ y #int } was provided, which does not conform to the constraint #{ x #int } -- #{ y #int }.')
+    })
+
+    test('nested functions', () => {
+      expect(customTestRun('let fn = <#T of #{ z #int }>() => <#U of #T>(obj #U) => obj; print fn<#{ x #int, z #int }>()<#{ x #int, y #int, z #int }>({ x: 1, y: 2, z: 3 }).y')[0].raw).toBe(2n)
+      expect(() => customTestRun('let fn = <#T of #{}>() => <#U of #T>(obj #U) => obj; print fn<#{ x #int }>()<#{ y #int }>({ x: 1, y: 2 }).y'))
+        .toThrow('The generic type parameter #{ y #int } was provided, which does not conform to the constraint #{ x #int } -- #{ y #int }.')
+      expect(() => customTestRun('let fn = <#T of #{}>() => <#U of #T>(obj #U) => obj; print fn<#{ x #int }>()<#{ x #int, y #int }>({ y: 2 }).y'))
+        .toThrow('Failed to match a type found from an argument, "#{ y #int }", with the generic param type "#{ x #int, y #int }". -- { y: 2 }.')
+    })
+
+    test('functions as type constraints', () => {
+      expect(customTestRun('let main = <#T of #(#int) => #int>(fn #T) => fn(2); print main((x #int) => x + 1)')[0].raw).toBe(3n)
+      expect(customTestRun('let exampleFn = <#U>(x #U) => x; let main = <#T of #typeof(exampleFn)>(fn #T) => fn<#int>(2); print main(exampleFn)')[0].raw).toBe(2n)
+    })
+
+    test('Able to assign to your own type constraint', () => {
+      expect(customTestRun('let fn = <#T of #{ x #int }, #U of #T>(x #U) => let y #T = x in y.x; print fn<#{ x #int }, #{ x #int, y #int }>({ x: 2, y: 3 }) + 1')[0].raw).toBe(3n)
+      expect(customTestRun('let fn = <#T, #U of #T, #V of #U>(x #V) => let y #T = x in y; print fn<#{ x #int }, #{ x #int }, #{ x #int, y #int }>({ x: 2, y: 3 }).x + 1')[0].raw).toBe(3n)
+    })
   })
 
-  // Assigning generics to each other
-  // * nested generics
-  // * Multiple generics vs reusing the same generic
-  // * With constraints
-  // * expect(customTestRun("let fn = <#T of #int>(a #T) => let b #T = a in b; print fn(2)")[0].raw).toBe(2n)
-  // Use one generic param within the constraint of another
-  // Try things like addition and function calling with generics (w/ type constraints) - I might not be doing concrete/param types correctly
-  // Eventually: Usage with tags.
+  test('assign generic functions to each other', () => {
+    expect(customTestRun('let fn1 = <#T>(x #T) => x; let fn2 #typeof(fn1) = fn1; print fn1(2)')[0].raw).toBe(2n)
+    expect(customTestRun('let fn1 = <#T>(x #T) => x; let fn2 = <#T>(x #T) => x; let fn3 #typeof(fn2) = fn1; print fn1(2)')[0].raw).toBe(2n)
+    expect(customTestRun('let fn1 = <#T, #U>(x #T, y #U) => x; let fn2 = <#V, #W>(x #V, y #W) => x; let fn3 #typeof(fn2) = fn1; print fn1(2, 3)')[0].raw).toBe(2n)
+    expect(() => customTestRun('let fn1 = <#T, #U>(x #T, y #U) => x; let fn2 = <#V, #W>(x #V, y #V) => x; let fn3 #typeof(fn2) = fn1; print fn1(2, 3)'))
+      .toThrow('Can not assign the type "#<#T, #U>(#T, #U) => #T" to an lvalue with the constraint "#<#V, #W>(#V, #V) => #V". -- fn3.')
+    expect(() => customTestRun('let fn1 = <#T>(x #T) => x; let fn2 = <#T, #U>(x #T) => x; let fn3 #typeof(fn2) = fn1; print fn1(2)'))
+      .toThrow('Can not assign the type "#<#T>(#T) => #T" to an lvalue with the constraint "#<#T, #U>(#T) => #T". -- fn3.')
+
+    expect(() => customTestRun('let fn1 = <#T>(x #T) => x; let fn2 = <#T of #int>(x #T) => x; let fn3 #typeof(fn2) = fn1; print fn3(2)'))
+      .toThrow('Can not assign the type "#<#T>(#T) => #T" to an lvalue with the constraint "#<#T of #int>(#T) => #T". -- fn3.')
+    expect(() => customTestRun('let fn1 = <#T of #int>(x #T) => x; let fn2 = <#T>(x #T) => x; let fn3 #typeof(fn2) = fn1; print fn3(3)'))
+      .toThrow('Can not assign the type "#<#T of #int>(#T) => #T" to an lvalue with the constraint "#<#T>(#T) => #T". -- fn3.')
+    expect(customTestRun('let fn1 = <#T of #int>(x #T) => x; let fn2 = <#T of #int>(x #T) => x; let fn3 #typeof(fn2) = fn1; print fn3(3)')[0].raw).toBe(3n)
+
+    expect(() => customTestRun('let fn1 = <#T of #{ x #int }>(x #T) => x.x; let fn2 = <#T of #{ x #int, y #int }>(x #T) => x.x; let fn3 #typeof(fn2) = fn1; print fn3({ x: 2 })'))
+      .toThrow('Can not assign the type "#<#T of #{ x #int }>(#T) => #int" to an lvalue with the constraint "#<#T of #{ x #int, y #int }>(#T) => #int". -- fn3.')
+    expect(() => customTestRun('let fn1 = <#T of #{ x #int, y #int }>(x #T) => x.x; let fn2 = <#T of #{ x #int }>(x #T) => x.x; let fn3 #typeof(fn2) = fn1; print fn3({ x: 2 })'))
+      .toThrow('Can not assign the type "#<#T of #{ x #int, y #int }>(#T) => #int" to an lvalue with the constraint "#<#T of #{ x #int }>(#T) => #int". -- fn3.')
+    expect(customTestRun('let fn1 = <#T of #{ x #int }>(x #T) => x.x; let fn2 = <#T of #{ x #int }>(x #T) => x.x; let fn3 #typeof(fn2) = fn1; print fn3({ x: 2 })')[0].raw).toBe(2n)
+  })
+
+  test('Nested generic parameters', () => {
+    expect(() => customTestRun("let fn = <#T>() => <#U>(x #T, y #U) => { x: x, u: y }; print fn()(2, 'x')"))
+      .toThrow('Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it. If this function being called was returned by another generic factory-function, you may need to supply type parameters to the factory-function. -- fn().')
+    expect(customTestRun("let fn = () => <#T>(x #T) => x; print fn()(2)")[0].raw).toBe(2n)
+    const result = customTestRun("let fn = <#T>() => <#U>(x #T, y #U) => { x: x, y: y }; print fn<#int>()(2, 'x')")[0].raw.nameToValue
+    expect(result.get('x').raw).toBe(2n)
+    expect(result.get('y').raw).toBe('x')
+    expect(customTestRun("let fn = <#T>() => <#U of #{ value #T }>(obj #U) => obj.value; print fn<#int>()({ value: 2 })")[0].raw).toBe(2n)
+
+    // Shadowing
+    expect(() => customTestRun('let fn = <#T>() => let inner = <#T>(x #T) => x let result #T = inner<#int>(2) in result'))
+      .toThrow('Can not assign the type "#int" to an lvalue with the constraint "#T". -- result.')
+    expect(customTestRun('let fn = <#T>() => let inner = <#T>(x #T) => x let result = inner<#int>(2) in result; print fn<#unknown>()')[0].raw).toBe(2n)
+  })
+
+  test('Type assertions with generics', () => {
+    // As of now, I'm disallowing the use of generics with "as" type assertions.
+    // Eventually, it would be good to add this ability in. To do so would require
+    // keeping track of generic parameter values at runtime
+    // (as these would normally fail with a runtime error if I didn't create this early error)
+    expect(() => customTestRun('let fn = <#T>(x #unknown) => x as #T; print fn<#int>(2) + 1'))
+      .toThrow('You are currently not allowed to use generics with "as" type assertions -- as #T.')
+    expect(() => customTestRun('let fn = <#T of #{ x #int }, #U of #T>(x #U) => (x as #T).x; print fn<#{ x #int }, #{ x #int, y #int }>({ x: 2, y: 3 }) + 1'))
+      .toThrow('You are currently not allowed to use generics with "as" type assertions -- as #T.')
+  })
+
+  test('Using generics in a function type definition', () => {
+    expect(customTestRun('let fn = <#T>(x #T, innerFn #(#T) => #T) => innerFn(x); print fn(2, (x #int) => x + 1)')[0].raw).toBe(3n)
+    expect(customTestRun('let fn = <#T>(x #T, innerFn #(#T) => #T) => let FnType = type #(#T) => #T let innerFn2 #:FnType = innerFn in innerFn2(x); print fn(2, (x #int) => x + 1)')[0].raw).toBe(3n)
+
+    expect(customTestRun('let fn = <#T>(x #T, innerFn #(#T) => #int) => innerFn(x); print fn<#int>(2, (x #int) => 1)')[0].raw).toBe(1n)
+
+    // This version nests a function within a param (which is important to test contravariance)
+    expect(customTestRun(`
+      let fn = <#T of #{ prop1 #int }>(obj #T, innerFn #(#T) => #int) => innerFn(obj)
+      print fn<#{ prop1 #int, prop2 #int }>({ prop1: 2, prop2: 3, prop3: 4 }, (obj #{ prop2 #int }) => obj.prop2)
+    `)[0].raw).toBe(3n)
+
+    // This version nests a function within a param, within a param
+    expect(customTestRun(`
+      let fn = <#T of #{ prop #int }>(innerFn #(#(#T) => #int) => #int) =>
+        innerFn((y #{ prop #int }) => y.prop)
+      print fn<#{ prop #int }>((callback #(#{ prop #int, prop2 #int }) => #int) => callback({ prop: 2, prop2: 3 }))
+    `)[0].raw).toBe(2n)
+
+    expect(customTestRun('let fn = <#T>(x #T, innerFn #() => #T) => innerFn(); print fn<#int>(2, () => 1)')[0].raw).toBe(1n)
+    expect(customTestRun('let fn = <#T>(innerFn #(#T) => #int) => innerFn; print fn<#int>((x #int) => 1)(2)')[0].raw).toBe(1n)
+
+    expect(() => customTestRun(`
+      let fn = <#T of #{ prop #int }>(innerFn #(#(#T) => #int) => #int) =>
+        innerFn((y #{ prop2 #int }) => y.prop2)
+      print fn<#{ prop #int }>((callback #(#{ prop #int, prop2 #int }) => #int) => callback({ prop: 2, prop2: 3 }))
+    `)).toThrow('Failed to match a type found from an argument, "#{ prop2 #int }", with the generic param type constraint "#{ prop #int }". -- (y #{ prop2 #int }) => y.prop2.')
+
+    // Using generics in a function type's type constraint
+    expect(customTestRun('let fn = <#T of #int>(x #T) => let innerFn #<#U of #T>(#U) => #int = <#U of #T>(x #U) => 2 in innerFn(x); print fn(3)')[0].raw).toBe(2n)
+    expect(() => customTestRun('let fn #<#T of #int>(#T) => #T = <#T of #int>(x #T) => 2; print fn(3)'))
+      .toThrow('Can not assign the type "#<#T of #int>(#T) => #int" to an lvalue with the constraint "#<#T of #int>(#T) => #T". -- fn.')
+  })
 })
 
 describe('Custom child types', () => {
@@ -879,7 +993,20 @@ describe('Custom child types', () => {
       .toThrow('Can not assign the type "#string" to an lvalue with the constraint "#int". -- x.')
   })
 
-  // TODO
+  test('A record with a generic type can have a custom child-type', () => {
+    expect(customTestRun('let IntType = type #int; let fn = <#T of #int>() => let Thing = { [$Symbol.childType]: type #T } let x #:Thing = 2 in x; print fn()')[0].raw).toBe(2n)
+    expect(customTestRun('let IntType = type #int; let fn = <#T of #typeof(IntType)>(newType #T) => let Thing #{ [#typeof($Symbol.childType)] #T } = { [$Symbol.childType]: newType } let x #:Thing = 2 in x; print fn(IntType)')[0].raw).toBe(2n)
+  })
+
+  // TODO (This is the same issue as the §QzVmq issue below)
+  xtest('A record with a never type can not work with a custom child-type protocol', () => {
+    expect(() => customTestRun('let Thing = { [$Symbol.childType]: type #int as #never }; let x #:Thing = 2'))
+      .toThrow('??')
+    expect(() => customTestRun('let Thing #{ [#typeof($Symbol.childType)] #unknown } = { [$Symbol.childType]: type #int }; let x #:Thing = 2'))
+      .toThrow('??')
+  })
+
+  // TODO (§QzVmq)
   xtest('Can not assign a non-contained-type to $Symbol.childType', () => {
     expect(() => customTestRun('let Thing = { [$Symbol.childType]: 2 }'))
       .toThrow('??')
@@ -939,7 +1066,12 @@ describe('Etc', () => {
 # Test having a tagged value with a large data type, get assigned to a smaller destructure, and vice-versa (possibly already tested)
 # All function parameters must have a declared type (this error has changed, but I should still test it)
 # Do I have good type-alias tests?
-# generics with records with private symbols
+# generics:
+#   with records with private symbols
+#   pattern matching with generics (These might not be possible until I fix "as" type assertions with generics - there's a comment about that in other tests.)
+#   Usage with tags.getConstrainingType
+#   Using generics where symbols go: { [here]: 2 }, obj[here], #{ [#typeof(here)]: 2 }, and { [here]: x } = y
+#   Passing in a type parameter for a type parameter value. (e.g. `fn<#T, #U>(3, 4))
 #
 # unknown and never
 # * When all branches of an if/else throw, the function's return type should be #never instead of #unit

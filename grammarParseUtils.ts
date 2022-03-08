@@ -38,7 +38,7 @@ const asPos = (file: string, value: AnyNode | Token | { pos: Position }): Positi
   } else if (isToken(value)) {
     return Position.from(file, value)
   } else {
-    warnings.warn(`Internal error: Attempted to extract a position out of the non-token '${formatErrorValue(value)}'`)
+    warnings.warn(`INTERNAL ERROR: Attempted to extract a position out of the non-token '${formatErrorValue(value)}'`)
     return unknownPos(file)
   }
 }

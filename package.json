@@ -15,7 +15,7 @@
     "@types/moo": "^0.5.5",
     "moo": "^0.5.1",
     "nearley": "^2.20.1",
-    "ts-node": "^10.2.1"
+    "ts-node": "^10.6.0"
   },
   "devDependencies": {
     "@babel/core": "^7.16.0",

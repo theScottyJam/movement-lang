@@ -21,6 +21,11 @@ export function formatErrorValue(value: unknown): string {
   }
 }
 
+// Use this function to ensure your if/else chain is exhaustive against all variants of an enum.
+export function assertUnreachable(value: never): never {
+  throw new Error('INTERNAL ERROR: Unreachable statement reached.')
+}
+
 interface MemoizeOpts<Params extends unknown[], CacheKey> {
   readonly argsToKey?: (...args: Params) => CacheKey
 }

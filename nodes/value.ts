@@ -211,8 +211,7 @@ InstructionNode.register<RecordPayload, RecordTypePayload>('record', {
         addTypeToMap = finalType => nameToType.set(entry.name, finalType)
       } else if (entryType === 'SYMBOL') {
         const { symbolExprNode } = entry
-        // TODO: Not sure if I should use getConstrainingType() here.
-        const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
+        const symbType = Type.getConcreteConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
         if (!types.isSymbol(symbType)) {
           throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbolExprNode.pos)
         }
@@ -284,14 +283,13 @@ InstructionNode.register<FunctionPayload, FunctionTypePayload>('function', {
       for (const { identifier, constraintNode, identPos } of genericParamDefList) {
         const constraint = pipe(
           actions.checkType(TypeNode, constraintNode, inwardState).type,
-          $=> Type.assertIsConcreteType($), // TODO: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function definition.
           $=> Type.createParameterType({
             constrainedBy: $,
-            parameterName: $.reprOverride ?? 'UNKNOWN', // TODO: This UNKNOWN type shouldn't be a thing. Perhaps I shouldn't have had this parameterName idea.
+            parameterName: identifier,
           })
         )
         genericParamTypes.push(constraint)
-        actions.follow.addToScopeInTypeNamespace(identifier, () => constraint, identPos)
+        actions.follow.addToScopeInTypeNamespace(identifier, constraint, identPos)
       }
 
       // Validating parameters

@@ -108,7 +108,7 @@ const createStdLibMapping: () => { [key: string]: InstructionNode.AnyInstruction
         const parentType = actions.follow.lookupVar(varName).type
         const result = pipe(
           Type.getProtocols(parentType, STDLIB_POS),
-          $=> $.childType(parentType),
+          $=> $.childType(Type.getConcreteConstrainingType(parentType)),
         )
         if (!result.success) throw new Error()
         return result.type

@@ -1,5 +1,7 @@
+import { assertUnreachable, pipe } from '../util'
 import { SemanticError } from './exceptions'
 import type { Position } from './Position'
+import { VARIANCE_DIRECTION } from './constants'
 
 const categoryBehaviors = Symbol('Category behaviors')
 
@@ -12,30 +14,41 @@ export const COMPARISON_OVERRIDES = {
 // Types
 //
 
-interface CategoryGenerics {
+type ValueOf<T> = T[keyof T]
+
+export interface CategoryGenerics {
   readonly name: string
   readonly data: unknown
 }
 
-type onGenricFn = <T extends CategoryGenerics>(opts: { self: ParameterType<T>, other: ConcreteType<T> }) => void
-type getReplacementFn = <T extends CategoryGenerics>(self: ParameterType<T>) => Type<T>
-
-interface MatchUpGenericsFnOpts<T extends CategoryGenerics> {
-  readonly usingType: ConcreteType<T>
-  readonly onGeneric: onGenricFn
+interface ExportedAlignTypesFnOpts {
+  readonly visit: <T extends CategoryGenerics>(self: Type<T>, other: Type<T>, { varianceDirection }: { varianceDirection: ValueOf<typeof VARIANCE_DIRECTION> }) => { visitChildren: boolean }
+  // true if we're in a region where types should become more relax than their constrain, instead of more restrictive.
+  // e.g. in the following example, the function parameter types are contravariant while return types are covariant,
+  // which is why this assignment is allowed.
+  // `let fn #(obj #{ x #int }) => #{} = (obj #{}) => { x: 2 }`
+  // (assignment checks, like above, aren't directly related to this specific property as
+  // that's not handled by align-type logic, but it does describe what covariance/contravariant means)
+  readonly varianceDirection?: ValueOf<typeof VARIANCE_DIRECTION>
 }
 
-interface ExportedMatchUpGenericsFnOpts<T extends CategoryGenerics> {
-  readonly usingType: Type<T>
-  readonly onGeneric: onGenricFn
+type AlignTypesFnOpts = Required<ExportedAlignTypesFnOpts>
+
+interface ExportedDeepMapFnOpts {
+  readonly visit: <T extends CategoryGenerics>(self: Type<T>, opts: { availableGenerics: readonly AnyParameterType[], varianceDirection: ValueOf<typeof VARIANCE_DIRECTION> }) =>
+    { keepNesting: true } | { keepNesting: false, replaceWith: AnyType }
+  // Contains a list of new generic types available at this place in the type.
+  // For example, in #{ fn #<T>() => #T }, availableGenerics will contain the #T type
+  // while visiting nodes within the function type.
+  readonly availableGenerics?: readonly AnyParameterType[]
+  readonly varianceDirection?: ValueOf<typeof VARIANCE_DIRECTION>
 }
 
-interface FillGenericParamsFnOpts {
-  readonly getReplacement: getReplacementFn
-}
+type DeepMapFnOpts = Required<ExportedDeepMapFnOpts>
 
 export interface Protocols<T extends CategoryGenerics> {
-  childType?: ((self: Type<T>) => { success: false } | { success: true, type: AnyConcreteType }) | null,
+  /// Before calling this function, turn your type into a concrete type with getConcreteConstrainingType()
+  childType?: ((self: ConcreteType<T>) => { success: false } | { success: true, type: AnyType }) | null,
 }
 
 export interface CategoryInfo<T extends CategoryGenerics> {
@@ -44,20 +57,22 @@ export interface CategoryInfo<T extends CategoryGenerics> {
   readonly [categoryBehaviors]: {
     readonly repr: (self: ConcreteType<T>) => string,
     readonly compare: (self: ConcreteType<T>, other: ConcreteType<T>) => boolean,
-    readonly matchUpGenerics: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void,
-    readonly fillGenericParams: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>,
+    readonly alignTypes: (self: Type<T>, other: Type<T>, opts: AlignTypesFnOpts) => void,
+    readonly deepMap: (self: Type<T>, opts: DeepMapFnOpts) => AnyType,
     readonly protocols: Protocols<T>,
   }
 }
 
+// Represents a non-generic type
 export interface ConcreteType<T extends CategoryGenerics> {
   readonly category: CategoryInfo<T>
   readonly data: T['data']
   readonly reprOverride?: string
 }
 
+// Represents a generic type
 export interface ParameterType<T extends CategoryGenerics> {
-  readonly constrainedBy: ConcreteType<T>
+  readonly constrainedBy: Type<T>
   readonly parameterName: string
   readonly parameterSentinel: symbol
 }
@@ -73,8 +88,8 @@ interface CreateCategoryOpts<T extends CategoryGenerics> {
   readonly repr: (self: ConcreteType<T>) => string
   readonly compare?: (self: ConcreteType<T>, other: ConcreteType<T>) => boolean
   readonly comparisonOverride?: typeof COMPARISON_OVERRIDES[keyof typeof COMPARISON_OVERRIDES]
-  readonly matchUpGenerics?: (self: Type<T>, opts: MatchUpGenericsFnOpts<T>) => void
-  readonly fillGenericParams?: (self: Type<T>, opts: FillGenericParamsFnOpts) => Type<T>
+  readonly alignTypes?: (self: Type<T>, other: Type<T>, opts: AlignTypesFnOpts) => void
+  readonly deepMap?: (self: Type<T>, opts: DeepMapFnOpts) => AnyType
   readonly protocols?: Protocols<T>
 }
 
@@ -85,12 +100,12 @@ interface CreateTypeOpts<Data> {
 }
 
 interface CreateParameterTypeOpts<T extends CategoryGenerics> {
-  readonly constrainedBy: ConcreteType<T>
+  readonly constrainedBy: Type<T>
   readonly parameterName: string
 }
 
 interface UpdateParameterTypeOpts<T extends CategoryGenerics> {
-  readonly constrainedBy?: ConcreteType<T>
+  readonly constrainedBy?: Type<T>
   readonly parameterName?: string
   readonly parameterSentinel?: symbol
 }
@@ -103,8 +118,16 @@ export function isTypeParameter<T extends CategoryGenerics>(type: Type<T>): type
   return 'parameterSentinel' in type
 }
 
-export function getConstrainingType<T extends CategoryGenerics>(type: Type<T>): ConcreteType<T> {
+/// Gets the immediate constraining type (which could be another generic parameter)
+export function getConstrainingType<T extends CategoryGenerics>(type: Type<T>): Type<T> {
   return isTypeParameter(type) ? type.constrainedBy : type
+}
+
+/// Recursively get constraining types until you arrive at a concrete type.
+/// i.e. #U could be constrained by #T, which in turn is constrained by #{ x #int }.
+/// If #U is passed in, then #{ x #int } will be returned.
+export function getConcreteConstrainingType<T extends CategoryGenerics>(type: Type<T>): ConcreteType<T> {
+  return isTypeParameter(type) ? getConcreteConstrainingType(type.constrainedBy) : type
 }
 
 export function assertIsTypeParameter<T extends CategoryGenerics>(type: Type<T>, errMessage = 'INTERNAL ERROR: Expected a parameter type'): ParameterType<T> {
@@ -117,11 +140,11 @@ export function assertIsConcreteType<T extends CategoryGenerics>(type: Type<T>, 
   return type
 }
 
-function defaultMatchUpGenericsFn<T extends CategoryGenerics>(self: ConcreteType<T>, { usingType, onGeneric }: MatchUpGenericsFnOpts<T>) {
+function defaultAlignTypesFn<T extends CategoryGenerics>(self: ConcreteType<T>, other: ConcreteType<T>, opts: AlignTypesFnOpts) {
   
 }
 
-function defaultFillGenericParamsFn<T extends CategoryGenerics>(self: ConcreteType<T>, { getReplacement }: FillGenericParamsFnOpts) {
+function defaultDeepMapFn<T extends CategoryGenerics>(self: ConcreteType<T>, opts: DeepMapFnOpts) {
   return self
 }
 
@@ -130,8 +153,8 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
     repr,
     compare = (self, other) => true,
     comparisonOverride = null,
-    matchUpGenerics = defaultMatchUpGenericsFn,
-    fillGenericParams = defaultFillGenericParamsFn,
+    alignTypes = defaultAlignTypesFn,
+    deepMap = defaultDeepMapFn,
     protocols = {},
   } = opts
 
@@ -141,8 +164,8 @@ export function createCategory<T extends CategoryGenerics>(name: T['name'], opts
     [categoryBehaviors]: {
       repr,
       compare,
-      matchUpGenerics,
-      fillGenericParams,
+      alignTypes,
+      deepMap,
       protocols,
     }
   }
@@ -192,33 +215,62 @@ export function withName<T extends CategoryGenerics>(type: Type<T>, newName: str
   }
 }
 
+export function withNewConstraint<T extends CategoryGenerics>(type: ParameterType<T>, newConstraint: Type<T>) {
+  return updateParameterType(type, { constrainedBy: newConstraint })
+}
+
 export function repr<T extends CategoryGenerics>(type: Type<T>): string {
   if (isTypeParameter(type)) return type.parameterName
   else return type.reprOverride ?? type.category[categoryBehaviors].repr(type)
 }
 
-// Match up one type with this type, and call onGeneric() every time a generic parameter is reached.
-export function matchUpGenerics<T extends CategoryGenerics>(type: Type<T>, { usingType, onGeneric }: ExportedMatchUpGenericsFnOpts<T>): void {
-  if (isTypeParameter(usingType)) throw new Error('INTERNAL ERROR')
-  if (isTypeParameter(type)) {
-    onGeneric({ self: type, other: usingType })
-    return
+// Match up one type with this type, and call visit() on each pair
+// Behavior is currently undefined if the types don't actually line up
+// (though, you're allowed to line up generics with non-generics)
+export function alignTypes<T extends CategoryGenerics>(type1: Type<T>, type2: Type<T>, { visit, varianceDirection = VARIANCE_DIRECTION.covariant }: ExportedAlignTypesFnOpts): void {
+  const { visitChildren } = visit(type1, type2, { varianceDirection })
+  if (visitChildren) {
+    getConcreteConstrainingType(type1).category[categoryBehaviors].alignTypes(type1, type2, { visit, varianceDirection })
   }
-  type.category[categoryBehaviors].matchUpGenerics(type, { usingType, onGeneric })
 }
 
-// Return a new type, where all generic params have been replaced with concrete types.
-export function fillGenericParams<T extends CategoryGenerics>(type: Type<T>, { getReplacement }: FillGenericParamsFnOpts): Type<T> {
-  if (isTypeParameter(type)) return getReplacement(type)
-  return type.category[categoryBehaviors].fillGenericParams(type, { getReplacement })
+// Maps over all nodes (root and leaves), and stops at any point where keepNesting returns false,
+// replacing the type with the returned replaceWith property.
+// Only values of the same type can be returned (though, you can turn generics into non-generics).
+export function deepMap<T extends CategoryGenerics>(type: Type<T>, { visit, availableGenerics = [], varianceDirection = VARIANCE_DIRECTION.covariant }: ExportedDeepMapFnOpts): AnyType {
+  const result = visit(type, { availableGenerics, varianceDirection })
+  if (result.keepNesting === false) return result.replaceWith
+
+  function mapIntoGenerics(innerType: Type<T>) {
+    // call deepMap() on the argument
+    if (!isTypeParameter(innerType)) {
+      return innerType.category[categoryBehaviors].deepMap(innerType, { visit, availableGenerics, varianceDirection })
+    }
+    // re-wrap generic, calling deepMap on it's constraining type.
+    return pipe(
+      mapIntoGenerics(innerType.constrainedBy),
+      $=> withNewConstraint(innerType, $)
+    )
+  }
+
+  return mapIntoGenerics(type)
+}
+
+// Basically the same as deepMap(), except you don't have the option to replace types.
+type NestedForEachVisitFn = (self: AnyType) => { keepNesting: boolean }
+export function nestedForEach<T extends CategoryGenerics>(type: Type<T>, visit: NestedForEachVisitFn): void {
+  deepMap<T>(type, {
+    visit(self, opts) {
+      const { keepNesting } = visit(self)
+      return keepNesting
+        ? { keepNesting: true }
+        : { keepNesting: false, replaceWith: self }
+    },
+  })
 }
 
 export function getProtocols(type: AnyType, pos: Position) {
-  if (isTypeParameter(type)) {
-    // TODO: Maybe I should allow generic type protocols?
-    throw new SemanticError('Can not perform this operation on a generic type', pos)
-  }
-  return type.category[categoryBehaviors].protocols
+  return getConcreteConstrainingType(type).category[categoryBehaviors].protocols
 }
 
 //
@@ -227,13 +279,13 @@ export function getProtocols(type: AnyType, pos: Position) {
 
 export function isTypeAssignableTo(assigner: AnyType, assignee: AnyType): boolean {
   const isUniversalAssigner = (type: AnyType) =>
-    !isTypeParameter(type) && type.category.comparisonOverride === COMPARISON_OVERRIDES.universalAssigner
+    isTypeParameter(type)
+      ? getConcreteConstrainingType(type).category.comparisonOverride === COMPARISON_OVERRIDES.universalAssigner
+      : type.category.comparisonOverride === COMPARISON_OVERRIDES.universalAssigner
 
   const isUniversalAssignee = (type: AnyType) =>
-    isTypeParameter(type)
-      ? type.constrainedBy.category.comparisonOverride === COMPARISON_OVERRIDES.universalAssignee
-      : type.category.comparisonOverride === COMPARISON_OVERRIDES.universalAssignee
-
+    !isTypeParameter(type) && type.category.comparisonOverride === COMPARISON_OVERRIDES.universalAssignee
+  
   if (isUniversalAssigner(assigner) || isUniversalAssignee(assignee)) return true
   if (isUniversalAssigner(assignee) || isUniversalAssignee(assigner)) return false
 
@@ -242,7 +294,12 @@ export function isTypeAssignableTo(assigner: AnyType, assignee: AnyType): boolea
   } else if (isTypeParameter(assigner) && !isTypeParameter(assignee)) {
     return isTypeAssignableTo(assigner.constrainedBy, assignee)
   } else if (isTypeParameter(assigner) && isTypeParameter(assignee)) {
-    return assigner.parameterSentinel === assignee.parameterSentinel
+    let currentAssigner: AnyType = assigner
+    do {
+      if (currentAssigner.parameterSentinel === assignee.parameterSentinel) return true
+      currentAssigner = currentAssigner.constrainedBy
+    } while (isTypeParameter(currentAssigner))
+    return false
   } else if (!isTypeParameter(assigner) && !isTypeParameter(assignee)) {
     return (
       assigner.category.name === assignee.category.name &&
@@ -251,9 +308,31 @@ export function isTypeAssignableTo(assigner: AnyType, assignee: AnyType): boolea
   } else throw new Error()
 }
 
-export function assertTypeAssignableTo(type: AnyType, expectedType: AnyType, pos: Position, message: string = null): void {
-  if (!isTypeAssignableTo(type, expectedType)) {
-    throw new SemanticError(message ?? `Found type "${repr(type)}", but expected type "${repr(expectedType)}".`, pos)
+export function assertTypeAssignableTo(type: AnyType, expectedType: AnyType, pos: Position, lastArg: { varianceDirection: ValueOf<typeof VARIANCE_DIRECTION>, errMessage: string } | string = null): void {
+  const defaultErrMessage = `Found type "${repr(type)}", but expected type "${repr(expectedType)}".`
+
+  const { varianceDirection = VARIANCE_DIRECTION.covariant, errMessage = defaultErrMessage } = (
+    lastArg == null ? {} :
+    typeof lastArg === 'string' ? { varianceDirection: VARIANCE_DIRECTION.covariant, errMessage: lastArg } :
+    lastArg
+  )
+
+  let matches: boolean
+  if (varianceDirection === VARIANCE_DIRECTION.covariant) {
+    matches = isTypeAssignableTo(type, expectedType)
+  } else if (varianceDirection === VARIANCE_DIRECTION.contravariant) {
+    matches = isTypeAssignableTo(expectedType, type)
+  } else if (varianceDirection === VARIANCE_DIRECTION.invariant) {
+    matches = (
+      isTypeAssignableTo(type, expectedType) &&
+      isTypeAssignableTo(expectedType, type)
+    )
+  } else {
+    assertUnreachable(varianceDirection)
+  }
+
+  if (!matches) {
+    throw new SemanticError(errMessage, pos)
   }
 }
 

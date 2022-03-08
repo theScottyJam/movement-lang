@@ -21,7 +21,7 @@ import * as RtRespState from '../language/RtRespState'
 import * as values from '../language/values'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
-import { PURITY, getPurityLevel } from '../language/constants'
+import { PURITY, getPurityLevel, VARIANCE_DIRECTION } from '../language/constants'
 import { pipe, zip, zip3 } from '../util'
 export * as value from './value'
 export * as assignmentTarget from './assignmentTarget'
@@ -340,7 +340,7 @@ InstructionNode.register<PropertyAccessPayload, {}>('propertyAccess', {
   typeCheck: (actions, inwardState) => ({ pos, l, identifier }) => {
     const lType = actions.checkType(InstructionNode, l, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
-    const result = assertRecordInnerDataType(Type.getConstrainingType(lType).data).nameToType.get(identifier)
+    const result = assertRecordInnerDataType(Type.getConcreteConstrainingType(lType).data).nameToType.get(identifier)
     if (!result) throw new SemanticError(`Failed to find the identifier "${identifier}" on the record of type ${Type.repr(lType)}.`, pos)
     return { type: result }
   },
@@ -365,13 +365,12 @@ InstructionNode.register<SymbolPropertyAccessPayload, {}>('symbolPropertyAccess'
   typeCheck: (actions, inwardState) => ({ pos, l, symbolExprNode }) => {
     const lType = actions.checkType(InstructionNode, l, inwardState).type
     Type.assertTypeAssignableTo(lType, types.createRecord({ nameToType: new Map(), symbolToInfo: new Map() }), l.pos, `Found type ${Type.repr(lType)} but expected a record.`)
-    // TODO: Not sure if I should use getConstrainingType() here.
-    const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
+    const symbType = Type.getConcreteConstrainingType(actions.checkType(InstructionNode, symbolExprNode, inwardState).type)
     if (!types.isSymbol(symbType)) {
       throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbolExprNode.pos)
     }
     const result = pipe(
-      Type.getConstrainingType(lType).data,
+      Type.getConcreteConstrainingType(lType).data,
       $=> assertRecordInnerDataType($).symbolToInfo.get(symbType.data.value)?.type,
     )
     if (!result) throw new SemanticError(`Failed to find the symbol "${types.reprSymbolWithoutTypeText(symbType)}" on the record of type ${Type.repr(lType)}.`, pos)
@@ -395,6 +394,12 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
   typeCheck: (actions, inwardState) => ({ expr, typeNode, operatorAndTypePos }) => {
     const exprType = actions.checkType(InstructionNode, expr, inwardState).type
     const expectedType = actions.checkType(TypeNode, typeNode, inwardState).type
+    Type.nestedForEach(expectedType, innerType => {
+      if (Type.isTypeParameter(innerType)) {
+        throw new SemanticError('You are currently not allowed to use generics with "as" type assertions', operatorAndTypePos)
+      }
+      return { keepNesting: true }
+    })
     if (!Type.isTypeAssignableTo(expectedType, exprType) && !Type.isTypeAssignableTo(exprType, expectedType)) {
       throw new SemanticError(`Attempted to change a type from "${Type.repr(exprType)}" to type "${Type.repr(expectedType)}". "as" type assertions can only widen or narrow a provided type.`, operatorAndTypePos)
     }
@@ -405,8 +410,28 @@ InstructionNode.register<TypeAssertionPayload, TypeAssertionTypePayload>('typeAs
   },
 })
 
-interface GenericParam { typeNode: AnyTypeNode, pos: Position }
-interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: GenericParam[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
+// Helper function for invoke(), that replaces all generics within a given type, with concrete types.
+interface LookupTypeOpts<T extends Type.CategoryGenerics> {
+  readonly parameterType: Type.ParameterType<T>
+}
+interface ReplaceGenericsOnTypeOpts {
+  readonly lookupType: <T extends Type.CategoryGenerics>({ parameterType }: LookupTypeOpts<T>) => Type.Type<T>
+}
+const replaceGenericsOnType = (type: AnyType, { lookupType }: ReplaceGenericsOnTypeOpts) => (
+  Type.deepMap(type, {
+    visit<T extends Type.CategoryGenerics>(type: Type.Type<T>, { availableGenerics, varianceDirection }: { availableGenerics: Type.AnyParameterType[], varianceDirection: ValueOf<typeof VARIANCE_DIRECTION> }) {
+      if (!Type.isTypeParameter(type)) {
+        return { keepNesting: true }
+      } else if (availableGenerics.some(generic => generic.parameterSentinel === type.parameterSentinel)) {
+        return { keepNesting: true }
+      } else {
+        return { keepNesting: false, replaceWith: lookupType({ parameterType: type }) }
+      }
+    }
+  })
+)
+
+interface InvokePayload { fnExpr: AnyInstructionNode, genericParams: AnyTypeNode[], args: AnyInstructionNode[], callWithPurity?: ValueOf<typeof PURITY> }
 export const invoke = (pos: Position, payload: InvokePayload) =>
   InstructionNode.create<InvokePayload>('invoke', pos, payload)
 
@@ -420,6 +445,7 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       const allBindings = AssignmentTargetNode.exec(param, rt, { incomingValue: value })
       rt = Runtime.update(rt, { scopes: [...rt.scopes, ...allBindings] })
     }
+
     let bodyRes
     try {
       bodyRes = InstructionNode.exec(fn.body, rt)
@@ -427,28 +453,43 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
       if (!(err instanceof FlowControlReturnError)) throw err
       return { rtRespState: RtRespState.create(), value: err.data.returnValue }
     }
+
     return {
       rtRespState: RtRespState.merge(fnExprRes.rtRespState, bodyRes.rtRespState, ...argResults.map(x => x.rtRespState)),
       value: bodyRes.value,
     }
   },
   typeCheck: (actions, inwardState) => ({ pos, fnExpr, genericParams, args, callWithPurity }) => {
-    const fnType = actions.checkType(InstructionNode, fnExpr, inwardState).type
+    const { fnTypeRepr, constrainingFnType } = pipe(
+      actions.checkType(InstructionNode, fnExpr, inwardState).type,
+      fnType => ({
+        fnTypeRepr: Type.repr(fnType),
+        constrainingFnType: Type.getConcreteConstrainingType(fnType)
+      })
+    )
     // Type check function expression
-    if (Type.isTypeParameter(fnType) || !types.isFunction(fnType)) {
-      throw new SemanticError(`Found type "${Type.repr(fnType)}", but expected a function.`, fnExpr.pos)
+    if (!types.isFunction(constrainingFnType)) {
+      throw new SemanticError(`Found type "${fnTypeRepr}", but expected a function.`, fnExpr.pos)
     }
-    const fnTypeData = assertFunctionInnerDataType(fnType.data)
+    const fnTypeData = assertFunctionInnerDataType(constrainingFnType.data)
 
     // Ensure it's called with the right number of generic params
     if (genericParams.length > fnTypeData.genericParamTypes.length) {
-      throw new SemanticError(`The function of type ${Type.repr(fnType)} must be called with at most ${fnTypeData.genericParamTypes.length} generic parameters, but got called with ${genericParams.length}.`, pos)
+      throw new SemanticError(`The function of type ${fnTypeRepr} must be called with at most ${fnTypeData.genericParamTypes.length} generic parameters, but got called with ${genericParams.length}.`, pos)
     }
+
     // Figure out the values of the generic params, and make sure they hold against the constraints
-    let valuesOfGenericParams = new Map()
+    let valuesOfGenericParams = new Map<symbol, Type.AnyType>()
     for (const [assignerGenericParam, assigneeGenericParam] of zip(genericParams, fnTypeData.genericParamTypes.slice(0, genericParams.length))) {
-      const assignerGenericParamType = actions.checkType(TypeNode, assignerGenericParam.typeNode, inwardState).type
-      Type.assertTypeAssignableTo(assignerGenericParamType, assigneeGenericParam.constrainedBy, assignerGenericParam.pos)
+      const assignerGenericParamType = actions.checkType(TypeNode, assignerGenericParam, inwardState).type
+      const constraint = replaceGenericsOnType(assigneeGenericParam.constrainedBy, {
+        lookupType<T extends Type.CategoryGenerics>({ parameterType }: LookupTypeOpts<T>) {
+          const concreteType = valuesOfGenericParams.get(parameterType.parameterSentinel) as Type.ConcreteType<T>
+          if (concreteType) return concreteType
+          throw new Error('INTERNAL ERROR')
+        },
+      })
+      Type.assertTypeAssignableTo(assignerGenericParamType, constraint, assignerGenericParam.pos, `The generic type parameter ${Type.repr(assignerGenericParamType)} was provided, which does not conform to the constraint ${Type.repr(constraint)}`)
       valuesOfGenericParams.set(assigneeGenericParam.parameterSentinel, assignerGenericParamType)
     }
 
@@ -459,16 +500,17 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
     }
     for (const [arg, assignerParamType, assigneeParamType] of zip3(args, argTypes, fnTypeData.paramTypes)) {
       // Check that it uses generics properly
-      Type.matchUpGenerics(assigneeParamType, {
-        usingType: assignerParamType,
-        onGeneric({ self, other }) {
+      Type.alignTypes(assigneeParamType, assignerParamType, {
+        visit(self, other, { varianceDirection }) {
+          if (!Type.isTypeParameter(self)) return { visitChildren: true }
           const genericValue = valuesOfGenericParams.get(self.parameterSentinel)
           if (!genericValue) {
-            Type.assertTypeAssignableTo(other, self.constrainedBy, arg.pos, `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type constraint "${Type.repr(self.constrainedBy)}".`)
+            Type.assertTypeAssignableTo(other, self.constrainedBy, arg.pos, { varianceDirection, errMessage: `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type constraint "${Type.repr(self.constrainedBy)}".` })
             valuesOfGenericParams.set(self.parameterSentinel, other)
           } else {
-            Type.assertTypeAssignableTo(other, genericValue, arg.pos, `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type "${Type.repr(genericValue)}".`)
+            Type.assertTypeAssignableTo(other, genericValue, arg.pos, { varianceDirection, errMessage: `Failed to match a type found from an argument, "${Type.repr(other)}", with the generic param type "${Type.repr(genericValue)}".` })
           }
+          return { visitChildren: false }
         },
       })
     }
@@ -484,12 +526,13 @@ InstructionNode.register<InvokePayload, {}>('invoke', {
     }
 
     // Make generic return type into concrete type
-    let returnType = Type.fillGenericParams(fnTypeData.bodyType, {
-      getReplacement(type) {
-        const concreteType = valuesOfGenericParams.get(type.parameterSentinel)
-        if (!concreteType) throw new SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it.`, pos)
-        return concreteType
-      }
+    const returnType = replaceGenericsOnType(fnTypeData.bodyType, {
+      lookupType<T extends Type.CategoryGenerics>({ parameterType }: LookupTypeOpts<T>) {
+        const concreteType = valuesOfGenericParams.get(parameterType.parameterSentinel) as Type.ConcreteType<T>
+        if (concreteType) return concreteType
+        if (actions.follow.scopeHasTypeParamSentinel(parameterType.parameterSentinel)) return parameterType
+        throw new SemanticError(`Uncertain what the return type is. Please explicitly pass in type parameters to help us determine it. If this function being called was returned by another generic factory-function, you may need to supply type parameters to the factory-function.`, pos)
+      },
     })
     return { type: returnType }
   },
@@ -534,6 +577,7 @@ InstructionNode.register<BranchPayload, {}>('branch', {
     const ifNotType = actions.checkType(InstructionNode, ifNot, inwardState).type
     
     const biggerType = Type.getWiderType([ifSoType, ifNotType], `The following "if true" case of this condition has the type "${Type.repr(ifSoType)}", which is incompatible with the "if not" case's type, "${Type.repr(ifNotType)}".`, ifSo.pos)
+    globalThis.xx = false
     return { type: biggerType }
   },
 })
@@ -671,7 +715,7 @@ InstructionNode.register<TypeAliasPayload, {}>('typeAlias', {
   exec: (rt, { definedWithin }) => InstructionNode.exec(definedWithin, rt),
   typeCheck: (actions, inwardState) => ({ pos, name, typeNode, definedWithin }) => {
     const type = actions.checkType(TypeNode, typeNode, inwardState).type
-    actions.follow.addToScopeInTypeNamespace(name, () => type, pos)
+    actions.follow.addToScopeInTypeNamespace(name, type, pos)
     return {
       type: actions.checkType(InstructionNode, definedWithin, inwardState).type
     }

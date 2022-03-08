@@ -42,10 +42,10 @@ export const userTypeLookup = (pos: Position, payload: UserTypeLookupPayload) =>
 
 TypeNode.register<UserTypeLookupPayload>('userTypeLookup', {
   typeCheck: (actions, inwardState) => ({ pos, typeName }) => {
-    const typeInfo = actions.follow.lookupType(typeName)
-    if (!typeInfo) throw new SemanticError(`Type "${typeName}" not found.`, pos)
+    const type = actions.follow.lookupType(typeName)
+    if (!type) throw new SemanticError(`Type "${typeName}" not found.`, pos)
     return {
-      type: Type.withName(typeInfo.createType(), typeName),
+      type: Type.withName(type, typeName),
     }
   },
 })
@@ -63,7 +63,7 @@ TypeNode.register<DescendentTypePayload>('descendentType', {
       const parentType = actions.checkType(InstructionNode, expr, inwardState).type
       const childTypeProtocol = Type.getProtocols(parentType, pos).childType
       if (!childTypeProtocol) throw missingProtocolError()
-      const result = childTypeProtocol(parentType)
+      const result = childTypeProtocol(Type.getConcreteConstrainingType(parentType))
       if (!result.success) throw missingProtocolError()
       return result.type
     })
@@ -111,8 +111,7 @@ TypeNode.register<RecordTypePayload>('recordType', {
         nameToType.set(name, actions.checkType(TypeNode, typeNode, inwardState).type)
       } else if (entry.type === 'SYMBOL') {
         const { symbTypeNode, typeNode, keyPos } = entry
-        // TODO: Not sure if I should use getConstrainingType() here.
-        const symbType = Type.getConstrainingType(actions.checkType(TypeNode, symbTypeNode, inwardState).type)
+        const symbType = Type.getConcreteConstrainingType(actions.checkType(TypeNode, symbTypeNode, inwardState).type)
         if (!types.isSymbol(symbType)) {
           throw new SemanticError(`Only symbol types can be used in a dynamic property type field. Received type "${Type.repr(symbType)}".`, symbTypeNode.pos)
         }
@@ -151,14 +150,13 @@ TypeNode.register<FunctionTypePayload>('functionType', {
     for (const { identifier, constraintNode, identPos } of genericParamDefList) {
       const constraint = pipe(
         actions.checkType(TypeNode, constraintNode, inwardState).type,
-        $=> Type.assertIsConcreteType($), // TODO: I don't see why this has to be a concrete type. Try writing a unit test to test an outer function's type param used in an inner function type definition.
         $=> Type.createParameterType({
           constrainedBy: $,
-          parameterName: $.reprOverride ?? 'UNKNOWN' // TODO: This parameterName was probably a bad idea.
+          parameterName: identifier,
         })
       )
       constraints.push(constraint)
-      actions.follow.addToScopeInTypeNamespace(identifier, () => constraint, identPos)
+      actions.follow.addToScopeInTypeNamespace(identifier, constraint, identPos)
     }
 
     const paramTypes = paramTypeNodes.map(paramTypeNode => actions.checkType(TypeNode, paramTypeNode, inwardState).type)

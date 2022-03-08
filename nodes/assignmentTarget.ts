@@ -13,7 +13,8 @@ import * as Position from '../language/Position'
 import * as Runtime from '../language/Runtime'
 import * as Type from '../language/Type'
 import * as types from '../language/types'
-import { pipe } from '../util'
+import { VARIANCE_DIRECTION } from '../language/constants'
+import { pipe, assertUnreachable } from '../util'
 
 type AnyInstructionNode = InstructionNode.AnyInstructionNode
 type AnyAssignmentTargetNode = AssignmentTargetNode.AnyAssignmentTargetNode
@@ -23,6 +24,8 @@ type Runtime = Runtime.Runtime
 type AnyType = Type.AnyType
 
 const DUMMY_POS = Position.from('<unknown>', { line: 1, col: 1, offset: 0, text: '' } as Token) // TODO - get rid of all occurrences of this
+
+type ValueOf<T> = T[keyof T]
 
 interface BindPayload {
   readonly identifier: string
@@ -35,9 +38,35 @@ interface BindTypePayload {
 export const bind = (pos: Position, { identifier, maybeTypeConstraintNode, identPos }: BindPayload) =>
   AssignmentTargetNode.create<BindPayload>('bind', pos, { identifier, maybeTypeConstraintNode, identPos })
 
+/// Replace all generic types within a type by their constraining types.
+/// This will go into the constraining types and perform the same replacement on those as well.
+/// i.e. The type #{ x #T, y #U } could be replaced with #{ x #int, y #boolean }.
+/// WARNING: When visiting generic types in contravariant regions (like in function parameters), they'll
+/// simply be replaced with a #never type to accept everything. This will make comparisons with the resulting type more
+/// liberal then it should technically be (which is o.k. for the specific use case it's designed for)
+export function getInaccurateNestedConstrainingType<T extends Type.CategoryGenerics>(type: Type.Type<T>): Type.AnyType {
+  const newType: Type.AnyType = Type.deepMap(type, {
+    visit<U extends Type.CategoryGenerics>(self, { varianceDirection }: { varianceDirection: ValueOf<typeof VARIANCE_DIRECTION> }) {
+      if (!Type.isTypeParameter(self)) {
+        return { keepNesting: true }
+      }
+      if (varianceDirection === VARIANCE_DIRECTION.contravariant) {
+        return { keepNesting: false, replaceWith: types.createNever() }
+      } else if (varianceDirection === VARIANCE_DIRECTION.invariant) {
+        return { keepNesting: false, replaceWith: self }
+      } else if (varianceDirection === VARIANCE_DIRECTION.covariant) {
+        return { keepNesting: false, replaceWith: getInaccurateNestedConstrainingType(self.constrainedBy) as Type.Type<U> }
+      } else {
+        assertUnreachable(varianceDirection)
+      }
+    },
+  })
+  return newType
+}
+
 AssignmentTargetNode.register<BindPayload, BindTypePayload>('bind', {
   exec: (rt, { identifier, typeConstraint }, { incomingValue, allowFailure = false }) => {
-    if (typeConstraint && !Type.isTypeAssignableTo(incomingValue.type, typeConstraint)) {
+    if (typeConstraint && !Type.isTypeAssignableTo(incomingValue.type, getInaccurateNestedConstrainingType(typeConstraint))) {
       if (allowFailure) return null
       throw new Error('Unreachable: Type mismatch when binding.')
     }
@@ -136,8 +165,7 @@ AssignmentTargetNode.register<DestructurRecordPayload, {}>('destructureRecord', 
         setType = type => nameToType.set(identifier, assignmentTargetType)
       } else if (entryType === 'SYMBOL') {
         const { symbNode } = entry
-        // TODO: Not sure if I should use getConstrainingType() here.
-        const symbType = Type.getConstrainingType(actions.checkType(InstructionNode, symbNode, inwardState).type)
+        const symbType = Type.getConcreteConstrainingType(actions.checkType(InstructionNode, symbNode, inwardState).type)
         if (!types.isSymbol(symbType)) {
           throw new SemanticError(`Only symbol types can be used in a dynamic property. Received type "${Type.repr(symbType)}".`, symbNode.pos)
         }
@@ -184,8 +212,9 @@ AssignmentTargetNode.register<DestructureTaggedPayload, {}>('destructureTagged',
     const { value: tagValue } = InstructionNode.exec(tag, rt)
 
     const innerTagTypeResult = pipe(
-      Type.getProtocols(tagValue.type, DUMMY_POS),
-      $=> $.childType(tagValue.type),
+      tagValue.type,
+      $=> Type.getConcreteConstrainingType($),
+      $=> Type.getProtocols(tagValue.type, DUMMY_POS).childType($),
     )
     if (!innerTagTypeResult.success) throw new Error()
     if (!Type.isTypeAssignableTo(incomingValue.type, innerTagTypeResult.type)) return null

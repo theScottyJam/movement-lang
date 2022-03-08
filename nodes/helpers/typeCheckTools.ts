@@ -131,7 +131,7 @@ const createActions = (withState: WithStateFn, transformRespState: TransformResp
       const prepareFollowState = withState(followState => () => ({
         value: followState,
         followState: FollowTypeState.update(followState, {
-          scopes: [{ forFn: Symbol(), valueNamespace: new Map(), typeNamespace: new Map() }],
+          scopes: [{ forFn: Symbol(), valueNamespace: new Map(), typeNamespace: new Map(), typeParamSentinelsInScope: new Set() }],
         }),
       }))
       const resetFollowState = withState(followState => (originalFollowState: FollowTypeState) => ({

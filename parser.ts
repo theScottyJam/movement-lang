@@ -40,7 +40,7 @@ function expectErrorOfTypes<T>(callback: () => T, errorTypes: (new (...args: unk
     if (errorTypes.some(ErrorType => err instanceof ErrorType)) {
       throw err
     } else if (allKnownSpecialErrors.some(SpecialError => err instanceof SpecialError)) {
-      throw new Error(`Internal error: Received an unexpected error of type ${err.constructor.name}:\n${err.message}`)
+      throw new Error(`INTERNAL ERROR: Received an unexpected error of type ${err.constructor.name}:\n${err.message}`)
     } else {
       throw err
     }
@@ -60,7 +60,7 @@ function parse(text: string, { path }: { path: string }): AstApi {
   }
 
   if (parser.results.length === 0) throw new BadSyntaxError('Unexpected end-of-file.', null)
-  if (parser.results.length > 1) throw new Error(`Internal error: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
+  if (parser.results.length > 1) throw new Error(`INTERNAL ERROR: Grammar is ambiguous - ${parser.results.length} possible results were found.`)
   const endOfFileInfo = {
     line: text.split('\n').length,
     col: top(text.split('\n')).length,

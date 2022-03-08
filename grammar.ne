@@ -353,7 +353,7 @@ expr10
       const purity = getsEntry == null ? PURITY.pure : PURITY.gets
       const genericParamDefList = genericParamDefListEntry?.[0].entries ?? []
       const [maybeBodyTypeNode] = bodyTypeNodeEntry ?? [null]
-      return nodes.value.function_(DUMMY_POS, { params: argDefList, body, maybeBodyTypeNode, purity, genericParamDefList, posWithoutBody })
+      return nodes.value.function_(pos, { params: argDefList, body, maybeBodyTypeNode, purity, genericParamDefList, posWithoutBody })
     })
   %} | expr15 {% id %}
 
@@ -435,7 +435,7 @@ expr80
 
   genericParamList
     -> "<" _ nonEmptyDeliminated[type _, "," _, ("," _):?] ">" {%
-      boundary(({ pos }, [,, entries]) => entries.map(([typeNode]) => ({ typeNode, pos })))
+      boundary(({ pos }, [,, entries]) => entries.map(([typeNode]) => typeNode))
     %}
 
 expr100
@@ -457,6 +457,8 @@ expr100
     )
   %} | stringLiteral {%
     id
+  %} | "(" expr10 ")" {%
+    boundary(({ pos }, [, innerExpr]) => innerExpr)
   %} | "{" _ deliminated[(userValueIdentifier | "[" _ expr10 _ "]") _ (type _):? ":" _ expr10 _, "," _, ("," _):?] "}" {%
     boundary(({ pos }, [,, entries, ]) => {
       const content = []

@@ -1,6 +1,5 @@
 import * as Type from '../../language/Type'
 import type * as types from '../../language/types'
-type createTypeFn = () => Type.AnyType
 
 export interface FollowTypeState {
   // Map of paths to module shapes
@@ -15,13 +14,20 @@ export interface FollowTypeState {
     // Stores type information for values, e.g. `let x = 2` would create an "x" entry.
     readonly valueNamespace: Map<string, Type.AnyType>
     // Stores types that were defined in this scope, e.g. `type #T = #int` would create a "T" entry.
-    readonly typeNamespace: Map<string, createTypeFn>
+    readonly typeNamespace: Map<string, Type.AnyType>
+    // Alternative representation of the data that can be found in typeNamespace.
+    readonly typeParamSentinelsInScope: Set<symbol>
   }[]
 }
 
-export function create(opts: Partial<FollowTypeState> = {}) {
+export function create(opts: Partial<FollowTypeState> = {}): FollowTypeState {
   return {
-    scopes: opts.scopes ?? [{ forFn: Symbol(), valueNamespace: new Map(), typeNamespace: new Map() }],
+    scopes: opts.scopes ?? [{
+      forFn: Symbol(),
+      valueNamespace: new Map(),
+      typeNamespace: new Map(),
+      typeParamSentinelsInScope: new Set(),
+    }],
     moduleShapes: opts.moduleShapes ?? new Map(),
   }
 }

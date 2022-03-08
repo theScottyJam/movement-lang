@@ -22,7 +22,7 @@ export function create({ file, line, col, length, offset }): Position {
 
 // TODO: Maybe deprecate this? moo-token specific stuff should probably go in grammarParseUtils.ts instead.
 export function from(file: string, token: Token): Position {
-  if (token.text == null) throw new Error(`Internal error: Attempted to extract a position out of the non-token '${formatErrorValue(token)}'`)
+  if (token.text == null) throw new Error(`INTERNAL ERROR: Attempted to extract a position out of the non-token '${formatErrorValue(token)}'`)
   return {
     [isPosSymb]: true,
     file,
