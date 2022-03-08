@@ -5,7 +5,7 @@ const { formatPosition } = _testingHelpers
 const customFormatPosition = ({ line, col, length }, text) => {
   return formatPosition(
     Position.create({
-      file: 'test-file.toy',
+      file: 'test-file.move',
       line,
       col,
       offset: (
@@ -47,7 +47,7 @@ test('It removes indentation in the output', () => {
 })
 
 test('It requests the proper path from loadModule', () => {
-  const pos = Position.create({ file: 'test-file.toy', line: 2, col: 9, offset: 16, length: 2 })
+  const pos = Position.create({ file: 'test-file.move', line: 2, col: 9, offset: 16, length: 2 })
   let path = null
 
   formatPosition(pos, {
@@ -62,7 +62,7 @@ test('It requests the proper path from loadModule', () => {
     colorOutput: false,
   })
 
-  expect(path).toBe('test-file.toy')
+  expect(path).toBe('test-file.move')
 })
 
 test('It requests the proper path from loadModule', () => {
@@ -136,7 +136,7 @@ test('It handles ranges over multiple lines', () => {
 
 test('It can handle empty strings', () => {
   // This might happen if, for example, the file got changed or deleted while the code was running.
-  const pos = Position.create({ file: 'test-file.toy', line: 2, col: 3, length: 5, offset: 10 })
+  const pos = Position.create({ file: 'test-file.move', line: 2, col: 3, length: 5, offset: 10 })
   expect(formatPosition(pos, { loadModule: () => '', colorOutput: false }))
     .toBe([
       'At line 2',

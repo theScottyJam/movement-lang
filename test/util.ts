@@ -12,7 +12,7 @@ export const customTestRun = (text, opts: CustomTestRunOpts = {}) => {
 
     const { message, pos } = err
     const moduleTextWithErr: string | typeof internalFile = (
-      pos.file === 'index.toy' ? text :
+      pos.file === 'index.move' ? text :
       pos.file === internalFile ? internalFile :
       opts.modules[pos.file]
     )

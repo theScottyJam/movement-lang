@@ -195,9 +195,9 @@ interface TestRunOpts {
 export function testRun(text, { modules: pathToSource = {} }: TestRunOpts = { modules: {} }) {
   let result = []
 
-  const { startingPath, moduleDefinitions } = recursiveParse('index.toy', {
+  const { startingPath, moduleDefinitions } = recursiveParse('index.move', {
     loadModuleSource: requestedPath => {
-      if (requestedPath === 'index.toy') return text
+      if (requestedPath === 'index.move') return text
       return pathToSource[requestedPath]
     }
   })
